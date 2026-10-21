@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Regenerates google-fonts-index.json and its .gz copy from google/fonts at a commit, then runs
-# the tests against that checkout. Run by hand; review `git diff --stat` and commit.
+# Regenerates both indexes and sources.json, then runs every test against the checkouts. Run by
+# hand; review `git diff --stat` and commit.
 #
-#   scripts/regenerate.sh [<google/fonts commit sha>]    (default: the tip of main)
+#   scripts/regenerate.sh [<google/fonts commit> [<notofonts.github.io commit>]]
 #
-# GOOGLE_FONTS_CHECKOUT sets where the sparse checkout lives (about 4 GB).
+# Both default to the tip of main. GOOGLE_FONTS_CHECKOUT sets where the sparse google/fonts
+# checkout lives (about 4 GB), NOTO_MIRROR where scripts/fetch-noto.sh puts the Noto files
+# (about 4 GB). CJK_SANS_TAG and CJK_SERIF_TAG pin the noto-cjk releases.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/craft-font-index"
+export GOOGLE_FONTS_CHECKOUT="${GOOGLE_FONTS_CHECKOUT:-$cache/google-fonts}"
+export NOTO_MIRROR="${NOTO_MIRROR:-$cache/noto}"
 
-checkout="${GOOGLE_FONTS_CHECKOUT:-${XDG_CACHE_HOME:-$HOME/.cache}/google-fonts-index/fonts}"
+checkout=$GOOGLE_FONTS_CHECKOUT
 remote=https://github.com/google/fonts.git
 commit="${1:-$(git ls-remote "$remote" refs/heads/main | cut -f1)}"
 if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
@@ -29,6 +34,11 @@ git -C "$checkout" checkout -q --detach FETCH_HEAD
 git -C "$checkout" reflog expire --expire=now --all
 git -C "$checkout" gc -q --prune=now
 
-cargo run --release -q -- --repo "$checkout" --commit "$commit" --out google-fonts-index.json
-GOOGLE_FONTS_CHECKOUT="$checkout" cargo test --release -q -- --include-ignored
+scripts/fetch-noto.sh ${2:+"$2"}
+
+cargo run --release -q -- google --repo "$checkout" --commit "$commit" --out indexes/google-fonts.json
+cargo run --release -q -- noto --mirror "$NOTO_MIRROR" --repo "$checkout" \
+  --google-index indexes/google-fonts.json --out indexes/noto.json
+cargo run --release -q -- sources --out sources.json indexes/google-fonts.json indexes/noto.json
+cargo test --release -q -- --include-ignored
 git diff --stat

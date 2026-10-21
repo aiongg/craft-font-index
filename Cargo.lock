@@ -53,6 +53,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-font-index"
+version = "1.1.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "sha2",
+ "skrifa",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,16 +131,6 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
-]
-
-[[package]]
-name = "google-fonts-index"
-version = "1.0.0"
-dependencies = [
- "flate2",
- "serde_json",
- "sha2",
- "skrifa",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
 [package]
-name = "google-fonts-index"
-version = "1.0.0"
+name = "craft-font-index"
+version = "1.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Generator for the Google Fonts index used by the Craft apps"
-repository = "https://github.com/aiongg/google-fonts-index"
+description = "Generators for the font indexes used by the Craft apps"
+repository = "https://github.com/aiongg/craft-font-index"
 publish = false
 
 [dependencies]

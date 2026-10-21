@@ -1,85 +1,132 @@
-//! Builds the Google Fonts index from a checkout of google/fonts. The format is described in
-//! README.md.
+//! Generators for the Craft font indexes. The format is described in README.md.
 //!
-//! Walks `{ofl,apache,ufl}/*/METADATA.pb`, hashes every listed font file, reads axes, PostScript
-//! names and code points from the font itself, and writes deterministic JSON. A malformed
-//! METADATA.pb or a missing font file is a warning, never an abort. The checkout is untrusted
-//! input: symlinks are not followed and nothing in it is executed. Based on @kntrttm's
-//! `xtask fonts-index` (photocraft#2453).
+//! Each source has its own index: Google Fonts from a checkout of google/fonts ([`google`]), the
+//! Noto releases from the notofonts repositories ([`noto`]). `sources.json` lists them
+//! ([`sources`]). Every index is deterministic JSON. A malformed entry or a missing font file is
+//! a warning, never an abort. Checkouts are untrusted input: symlinks are not followed and
+//! nothing in them is executed.
 
 pub mod font;
+pub mod google;
 pub mod lang;
+pub mod noto;
 pub mod pb;
+pub mod sources;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::font::FontInfo;
 use crate::lang::LangData;
-use crate::pb::{Val, parse_pb};
+
+pub use google::{LICENSE_DIRS, build_index};
 
 /// Format version, `MAJOR.MINOR`. Readers reject an unknown major version; a minor version
 /// only adds fields.
-pub const VERSION: &str = "1.0";
+pub const VERSION: &str = "1.1";
 /// The major version as a number, the field photocraft#2453's reader checks.
 pub const SCHEMA: u32 = 1;
 
-pub const LICENSE_DIRS: &[&str] = &["ofl", "apache", "ufl"];
-const LICENSE_FILES: &[&str] = &["OFL.txt", "LICENSE.txt", "UFL.txt"];
-const MAX_FONT_BYTES: u64 = 64 * 1024 * 1024;
+/// URL templates for files in a GitHub repository at a commit or tag: jsDelivr, then
+/// raw.githubusercontent.com. jsDelivr refuses files over 20 MB, which the fallback serves.
+pub const GITHUB_FILE_URLS: &[&str] = &[
+    "https://cdn.jsdelivr.net/gh/{repo}@{ref}/{path}",
+    "https://raw.githubusercontent.com/{repo}/{ref}/{path}",
+];
+
+pub(crate) const MAX_FONT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_LICENSE_BYTES: u64 = 1024 * 1024;
 
 pub fn sha256_hex(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Builds the index for the checkout at `repo`. With `only`, just the family directories named
-/// there (`ofl/lato`, or `lato` in any licence directory). Per-family problems go to `warnings`.
-pub fn build_index(
-    repo: &Path,
-    commit: &str,
-    only: Option<&[String]>,
-    warnings: &mut Vec<String>,
-) -> Result<Value, String> {
-    if commit.len() != 40
-        || !commit
-            .bytes()
+pub(crate) fn is_commit(s: &str) -> bool {
+    s.len() == 40
+        && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(format!("commit `{commit}` is not a full lowercase hex sha"));
+}
+
+/// What an index says about its source, besides its families.
+pub(crate) struct IndexHeader<'a> {
+    pub source: &'a str,
+    pub name: &'a str,
+    pub homepage: &'a str,
+    /// The commit the index was generated from, and the default `{ref}`.
+    pub commit: &'a str,
+    /// The default `{repo}`.
+    pub repo: &'a str,
+    /// Format 1.0's `base_url` and `fallback_base_url`, for a source whose files all share them.
+    pub base_urls: Option<(String, String)>,
+}
+
+/// One `files` entry. `extra_ps` is a PostScript name from outside the font (METADATA.pb).
+pub(crate) fn file_record(
+    path: String,
+    data: &[u8],
+    info: FontInfo,
+    style: &str,
+    weight: u32,
+    extra_ps: Option<String>,
+) -> Value {
+    let mut ps: Vec<String> = Vec::new();
+    ps.extend(extra_ps);
+    ps.extend(info.postscript);
+    ps.sort();
+    ps.dedup();
+    let axes: Vec<Value> = info
+        .axes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(t, lo, hi)| json!({"tag": t, "min": lo, "max": hi}))
+        .collect();
+    let mut rec = json!({
+        "path": path,
+        "size": data.len(),
+        "sha256": sha256_hex(data),
+        "style": style,
+        "weight": weight,
+        "axes": axes,
+        "postscript": ps,
+    });
+    if (info.width - 100.0).abs() > 0.01 {
+        rec["width"] = json!(info.width);
     }
-    let lang = LangData::load(repo, warnings)?;
-    let mut families: Vec<Value> = Vec::new();
-    for d in LICENSE_DIRS {
-        let Ok(rd) = std::fs::read_dir(repo.join(d)) else {
-            continue;
-        };
-        let mut dirs: Vec<_> = rd.filter_map(Result::ok).collect();
-        dirs.sort_by_key(|e| e.file_name());
-        for e in dirs {
-            let name = e.file_name().to_string_lossy().to_string();
-            if let Some(only) = only
-                && !only
-                    .iter()
-                    .any(|o| *o == name || *o == format!("{d}/{name}"))
-            {
-                continue;
-            }
-            let Ok(meta) = std::fs::symlink_metadata(e.path()) else {
-                continue;
-            };
-            if !meta.is_dir() {
-                continue;
-            }
-            match family_entry(repo, d, &name, &lang, warnings) {
-                Ok(Some(f)) => families.push(f),
-                Ok(None) => {}
-                Err(w) => warnings.push(format!("{d}/{name}: {w}")),
-            }
-        }
+    rec
+}
+
+/// A family's `license_file`: the file at `local`, published at `path` (in `repo_ref` when it
+/// isn't the family's repository and ref).
+pub(crate) fn license_record(
+    local: &Path,
+    path: &str,
+    repo_ref: Option<(&str, &str)>,
+) -> Result<Value, String> {
+    let m = std::fs::symlink_metadata(local).map_err(|e| format!("licence `{path}`: {e}"))?;
+    if !m.is_file() || m.len() == 0 || m.len() > MAX_LICENSE_BYTES {
+        return Err(format!(
+            "licence `{path}` is not a regular file of acceptable size"
+        ));
     }
+    let data = std::fs::read(local).map_err(|e| format!("licence `{path}`: {e}"))?;
+    let mut rec = json!({"path": path, "size": data.len(), "sha256": sha256_hex(&data)});
+    if let Some((repo, r)) = repo_ref {
+        rec["repo"] = json!(repo);
+        rec["ref"] = json!(r);
+    }
+    Ok(rec)
+}
+
+/// Sorts the families, builds the language and script tables and assembles the index.
+pub(crate) fn finish_index(
+    header: &IndexHeader,
+    mut families: Vec<Value>,
+    lang: &LangData,
+) -> Value {
     families.sort_by(|a, b| {
         let key = |v: &Value| {
             (
@@ -96,7 +143,7 @@ pub fn build_index(
         .flat_map(|f| f["languages"].as_array().into_iter().flatten())
         .filter_map(|l| l.as_str().map(str::to_string))
         .collect();
-    let position: std::collections::BTreeMap<&str, usize> = used
+    let position: BTreeMap<&str, usize> = used
         .iter()
         .enumerate()
         .map(|(i, id)| (id.as_str(), i))
@@ -136,171 +183,31 @@ pub fn build_index(
         .iter()
         .map(|code| json!({"id": code, "name": lang.scripts.get(*code).map_or(*code, String::as_str)}))
         .collect();
-    Ok(json!({
-        "schema": SCHEMA,
-        "version": VERSION,
-        "source": "google/fonts",
-        "commit": commit,
-        "base_url": format!("https://cdn.jsdelivr.net/gh/google/fonts@{commit}/"),
-        "fallback_base_url": format!("https://raw.githubusercontent.com/google/fonts/{commit}/"),
-        "languages": languages,
-        "scripts": scripts,
-        "families": families,
-    }))
-}
-
-fn strings(msg: &pb::Msg, key: &str) -> Vec<String> {
-    msg.all(key)
-        .filter_map(Val::as_scalar)
-        .map(str::to_string)
-        .collect()
-}
-
-fn family_entry(
-    repo: &Path,
-    dir: &str,
-    name: &str,
-    lang: &LangData,
-    warnings: &mut Vec<String>,
-) -> Result<Option<Value>, String> {
-    let fam_dir = repo.join(dir).join(name);
-    let md = fam_dir.join("METADATA.pb");
-    match std::fs::symlink_metadata(&md) {
-        Ok(m) if m.is_file() => {}
-        _ => return Ok(None),
+    let mut index = serde_json::Map::new();
+    index.insert("schema".into(), json!(SCHEMA));
+    index.insert("version".into(), json!(VERSION));
+    index.insert("source".into(), json!(header.source));
+    index.insert("commit".into(), json!(header.commit));
+    if let Some((base, fallback)) = &header.base_urls {
+        index.insert("base_url".into(), json!(base));
+        index.insert("fallback_base_url".into(), json!(fallback));
     }
-    let bytes = std::fs::read(&md).map_err(|e| format!("read METADATA.pb: {e}"))?;
-    if bytes.len() > 4 * 1024 * 1024 {
-        return Err("METADATA.pb is too large".into());
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let msg = parse_pb(&text).map_err(|e| format!("malformed METADATA.pb: {e}"))?;
-    let family = msg
-        .str("name")
-        .ok_or("METADATA.pb has no name")?
-        .to_string();
-    let license = msg
-        .str("license")
-        .map_or_else(|| dir.to_uppercase(), str::to_string);
-    let designer = msg.str("designer").unwrap_or("").to_string();
-    let categories = strings(&msg, "category");
-    let mut subsets = strings(&msg, "subsets");
-    subsets.sort();
-    subsets.dedup();
-    let license_path = LICENSE_FILES
-        .iter()
-        .find(|l| std::fs::symlink_metadata(fam_dir.join(l)).is_ok_and(|m| m.is_file()))
-        .map(|l| format!("{dir}/{name}/{l}"));
-
-    let mut cmap = BTreeSet::new();
-    let mut files = Vec::new();
-    for f in msg.all("fonts").filter_map(Val::as_msg) {
-        let Some(filename) = f.str("filename") else {
-            warnings.push(format!("{dir}/{name}: font entry without filename"));
-            continue;
-        };
-        if filename.contains('/')
-            || filename.contains('\\')
-            || filename.contains("..")
-            || filename.is_empty()
-        {
-            warnings.push(format!("{dir}/{name}: unsafe filename `{filename}`"));
-            continue;
-        }
-        let path = fam_dir.join(filename);
-        let Ok(m) = std::fs::symlink_metadata(&path) else {
-            warnings.push(format!("{dir}/{name}: missing font file `{filename}`"));
-            continue;
-        };
-        if !m.is_file() || m.len() == 0 || m.len() > MAX_FONT_BYTES {
-            warnings.push(format!(
-                "{dir}/{name}: `{filename}` is not a regular file of acceptable size"
-            ));
-            continue;
-        }
-        let data = match std::fs::read(&path) {
-            Ok(d) => d,
-            Err(e) => {
-                warnings.push(format!("{dir}/{name}: read `{filename}`: {e}"));
-                continue;
-            }
-        };
-        let info = font::read_font(&data);
-        // Clients parse every file before installing it, so an unparseable one is useless.
-        if info.axes.is_none() {
-            warnings.push(format!(
-                "{dir}/{name}: `{filename}` does not parse as a font"
-            ));
-            continue;
-        }
-        cmap.extend(&info.codepoints);
-        let weight = f.num("weight").map_or(400, |w| w.clamp(1.0, 1000.0) as u32);
-        let mut ps: Vec<String> = Vec::new();
-        ps.extend(f.str("post_script_name").map(str::to_string));
-        ps.extend(info.postscript);
-        ps.sort();
-        ps.dedup();
-        let axes: Vec<Value> = info
-            .axes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(t, lo, hi)| json!({"tag": t, "min": lo, "max": hi}))
-            .collect();
-        files.push(json!({
-            "path": format!("{dir}/{name}/{filename}"),
-            "size": data.len(),
-            "sha256": sha256_hex(&data),
-            "style": f.str("style").unwrap_or("normal"),
-            "weight": weight,
-            "axes": axes,
-            "postscript": ps,
-        }));
-    }
-    if files.is_empty() {
-        return Err("no usable font files".into());
-    }
-    files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
-
-    // Declared languages plus the ones the font's code points cover.
-    let mut languages: BTreeSet<String> = strings(&msg, "languages").into_iter().collect();
-    for l in &languages {
-        if !lang.languages.iter().any(|k| k.id == *l) {
-            warnings.push(format!(
-                "{dir}/{name}: language `{l}` is not in the lang data"
-            ));
-        }
-    }
-    languages.extend(lang.covered(&cmap).into_iter().map(|l| l.id.clone()));
-    let mut scripts: BTreeSet<String> = languages
-        .iter()
-        .filter_map(|id| lang.script_of(id))
-        .collect();
-    scripts.extend(
-        msg.str("primary_script")
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
+    index.insert(
+        "source_info".into(),
+        json!({
+            "id": header.source,
+            "name": header.name,
+            "homepage": header.homepage,
+            "curated": true,
+            "file_urls": GITHUB_FILE_URLS,
+        }),
     );
-    for s in &subsets {
-        match lang.subset_script(s) {
-            Some(code) => {
-                scripts.insert(code.to_string());
-            }
-            None if s == "menu" => {}
-            None => warnings.push(format!("{dir}/{name}: subset `{s}` has no known script")),
-        }
-    }
-
-    Ok(Some(json!({
-        "family": family,
-        "designer": designer,
-        "categories": categories,
-        "subsets": subsets,
-        "languages": languages,
-        "scripts": scripts,
-        "license": license,
-        "license_path": license_path,
-        "files": files,
-    })))
+    index.insert("repo".into(), json!(header.repo));
+    index.insert("ref".into(), json!(header.commit));
+    index.insert("languages".into(), json!(languages));
+    index.insert("scripts".into(), json!(scripts));
+    index.insert("families".into(), json!(families));
+    Value::Object(index)
 }
 
 /// The index as JSON with one table row or family per line, so a regeneration diffs per family.
@@ -339,4 +246,87 @@ pub fn gzip(data: &[u8]) -> Vec<u8> {
         .write(Vec::new(), flate2::Compression::best());
     enc.write_all(data).expect("writing to a Vec");
     enc.finish().expect("writing to a Vec")
+}
+
+/// The download URLs of `entry` (a file or a `license_file`) of `family`, best first: each
+/// `source_info.file_urls` template with `{repo}` and `{ref}` taken from the entry, else the
+/// family, else the index, and `{path}` percent-encoded per segment. An index without
+/// `source_info` is format 1.0 and uses `base_url` and `fallback_base_url`.
+pub fn file_urls(index: &Value, family: &Value, entry: &Value) -> Result<Vec<String>, String> {
+    let path = entry["path"].as_str().ok_or("entry has no path")?;
+    if path.is_empty()
+        || path.starts_with('/')
+        || path
+            .split('/')
+            .any(|s| s.is_empty() || s == "." || s == "..")
+        || path.contains('\\')
+    {
+        return Err(format!("unsafe path `{path}`"));
+    }
+    let encoded = path
+        .split('/')
+        .map(percent_encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    let Some(templates) = index["source_info"]["file_urls"].as_array() else {
+        return Ok([&index["base_url"], &index["fallback_base_url"]]
+            .into_iter()
+            .filter_map(Value::as_str)
+            .map(|base| format!("{base}{encoded}"))
+            .collect());
+    };
+    let field = |k: &str| {
+        [entry, family, index]
+            .into_iter()
+            .find_map(|v| v[k].as_str())
+            .map(str::to_string)
+    };
+    let mut urls = Vec::new();
+    for t in templates {
+        let t = t.as_str().ok_or("a file URL template is not a string")?;
+        let mut url = t.replace("{path}", &encoded);
+        for (key, check) in [("repo", is_repo as fn(&str) -> bool), ("ref", is_ref)] {
+            let placeholder = format!("{{{key}}}");
+            if url.contains(&placeholder) {
+                let v = field(key).ok_or_else(|| format!("`{path}` has no `{key}`"))?;
+                if !check(&v) {
+                    return Err(format!("bad {key} `{v}`"));
+                }
+                url = url.replace(&placeholder, &v);
+            }
+        }
+        if url.contains('{') || !url.starts_with("https://") {
+            return Err(format!("template `{t}` does not resolve to an https URL"));
+        }
+        urls.push(url);
+    }
+    Ok(urls)
+}
+
+fn percent_encode(segment: &str) -> String {
+    segment
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// A git ref (tag or commit) that needs no escaping in a URL.
+pub fn is_ref(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.starts_with('.')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// `owner/name` on GitHub.
+pub fn is_repo(s: &str) -> bool {
+    s.split_once('/')
+        .is_some_and(|(o, n)| is_ref(o) && is_ref(n) && !n.contains('/'))
 }

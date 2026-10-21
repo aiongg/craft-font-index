@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use skrifa::{FontRef, MetadataProvider, string::StringId};
+use skrifa::{FontRef, MetadataProvider, attribute::Style, string::StringId};
 
 #[derive(Default)]
 pub struct FontInfo {
@@ -11,6 +11,17 @@ pub struct FontInfo {
     pub postscript: Vec<String>,
     /// Mapped code points, for language coverage.
     pub codepoints: BTreeSet<u32>,
+    /// Typographic family name (name ID 16), else name ID 1.
+    pub family: Option<String>,
+    /// Name ID 9.
+    pub designer: Option<String>,
+    /// Name IDs 13 and 14, joined.
+    pub license: String,
+    /// The default instance's weight: the `wght` axis default, else OS/2 usWeightClass.
+    pub weight: f32,
+    /// The default instance's width in percent: the `wdth` axis default, else OS/2 usWidthClass.
+    pub width: f32,
+    pub italic: bool,
 }
 
 /// Axes, PostScript names and mapped code points, read with skrifa. The PostScript names are
@@ -55,9 +66,27 @@ pub fn read_font(data: &[u8]) -> FontInfo {
         }
     }
     let codepoints = font.charmap().mappings().map(|(cp, _)| cp).collect();
+    let attrs = font.attributes();
+    let axis_default = |tag: &[u8; 4]| {
+        font.axes()
+            .iter()
+            .find(|a| a.tag() == skrifa::Tag::new(tag))
+            .map(|a| a.default_value())
+    };
+    let license = [StringId::LICENSE_DESCRIPTION, StringId::LICENSE_URL]
+        .into_iter()
+        .filter_map(first)
+        .collect::<Vec<_>>()
+        .join("\n");
     FontInfo {
         axes: Some(axes),
         postscript: ps,
         codepoints,
+        family: first(StringId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| first(StringId::FAMILY_NAME)),
+        designer: first(StringId::DESIGNER),
+        license,
+        weight: axis_default(b"wght").unwrap_or(attrs.weight.value()),
+        width: axis_default(b"wdth").unwrap_or(attrs.stretch.percentage()),
+        italic: attrs.style != Style::Normal,
     }
 }
