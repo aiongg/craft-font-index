@@ -1,0 +1,17 @@
+[package]
+name = "google-fonts-index"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Generator for the Google Fonts index used by the Craft apps"
+repository = "https://github.com/aiongg/google-fonts-index"
+publish = false
+
+[dependencies]
+flate2 = "1.1"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+sha2 = "0.10"
+skrifa = "0.48"
+
+[profile.release]
+debug = false
