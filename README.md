@@ -42,7 +42,7 @@ The indexes and `sources.json` are JSON objects. All lists are sorted, and the s
 
 A minor version only adds fields. Any other change (removing or renaming a field, or changing a field's meaning or type) is a new major version. `schema` holds the major version as a number. photocraft#2453's reader checks that field.
 
-The current version is `1.2`. Version 1.1 had no `tags`, `copyright`, `reserved_names`, `notice_file` or `upstream`; a 1.1 reader ignores them. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
+The current version is `1.2`. Version 1.1 had no `tags`, `copyright`, `reserved_names`, `notice_file`, `upstream`, `samples`, `sample_script`, `sample_text`, `instances` or `list_instance`; a 1.1 reader ignores them. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
 
 ### sources.json
 
@@ -80,6 +80,7 @@ Each entry of `indexes`:
 | `ref` | string | 1.1. The default `{ref}` for file URLs: a commit or tag |
 | `languages` | array | Every language any family supports, sorted by `id` (see below) |
 | `scripts` | array | Every script any family uses, sorted by `id` (see below) |
+| `samples` | object | 1.2. The default preview text per script: ISO 15924 code to a sample (see below), for every script a family or file names that has one, sorted by code |
 | `families` | array | The families, sorted by name (case-insensitive) |
 
 ### Source info
@@ -126,6 +127,22 @@ A `repo` is `owner/name` and a `ref` is made of `A-Z a-z 0-9 . _ -`, so neither 
 | `id` | string | ISO 15924 code. `Zmth` (maths), `Zsym` (symbols) and `Zsye` (emoji) cover google/fonts' `math`, `symbols` and `emoji` subsets. |
 | `name` | string | English name |
 
+### Sample
+
+| Field | Type | Meaning |
+|---|---|---|
+| `text` | string | At most 60 characters |
+| `method` | string | Where the text comes from: `udhr`, `iroha` or `exemplar` |
+| `language` | string | The gflanguages ID of the text's language |
+
+The generator chooses each script's sample from the gflanguages data:
+
+- `udhr`: the language with that script and the largest population (`zh_Hant` for `Hant`, where population ranks Wu first; on a tie, the first ID) gives its UDHR `sample_text`: the `styles` field, the sentence fonts.google.com shows, else the first of `tester`, `specimen_48`, `specimen_36`, `specimen_32`, `specimen_21`, `specimen_16`, `poster_sm`, `poster_md`. `Hira` and `Kana` use `Jpan`'s language, `Hang` uses `Kore`'s and `Hani` uses `Hans`'s.
+- `iroha`: `Hira`, for kana-only fonts, gets the Iroha poem in hiragana, since the Japanese UDHR sentence has kanji they lack.
+- `exemplar`: a script whose languages have no UDHR text gets the base exemplar characters of the most spoken one, without spaces and braces (`Bamu`).
+
+Scripts with neither (`Zsym`, `Lina`, ...) have no sample; their files carry their own `sample_text`.
+
 ### Family
 
 | Field | Type | Meaning |
@@ -146,6 +163,7 @@ A `repo` is `owner/name` and a `ref` is made of `A-Z a-z 0-9 . _ -`, so neither 
 | `reserved_names` | string array | 1.2. The Reserved Font Names the OFL notice declares (`with Reserved Font Names "Abril" and "Abril Fatface"` gives `Abril`, `Abril Fatface`). Empty when none. A client that modifies a font must rename it if this isn't empty. |
 | `notice_file` | object | 1.2, optional. An Apache family's `NOTICE` file: `path`, `size`, `sha256`, located like `license_file`. Absent when the family ships none. |
 | `upstream` | string | 1.2, optional. METADATA.pb's `source.repository_url`: where the family is developed. |
+| `sample_script` | string | 1.2. The script whose sample previews the family: the script most of its files show (see "Preview text"). |
 | `files` | array | The font files, sorted by path |
 
 `languages` holds the languages the source declares (google/fonts METADATA.pb), plus every living language whose base exemplar characters are all in the family's character map. A living language is one with a known speaker population that is not marked historical. Families refer to languages by position because that halves the index size. `scripts` holds the scripts of those languages, plus the family's own script: METADATA.pb's `primary_script` and the scripts of its subsets for Google Fonts, the script of the notofonts repository or CJK region for Noto.
@@ -200,7 +218,24 @@ Google Fonts: a family gets each tag above that one of its tag rows reaches with
 | `axes` | array | Variation axes, `{"tag": "wght", "min": 100.0, "max": 900.0}`, read from the font's `fvar` table. Empty for a static font. |
 | `postscript` | string array | PostScript names: METADATA.pb's `post_script_name`, the font's name ID 6 and, for a variable font, each named instance's PostScript name. When an instance has no name of its own, it is the name ID 25 prefix, `-` and the subfamily name without spaces. Missing-font lookup matches on these. |
 
+| `instances` | array | 1.2, optional. The `fvar` named instances, in font order: `{"name": "Bold", "coordinates": {"wght": 700.0}}`, with `name` the instance's subfamily name and a user coordinate for every axis, in `axes` order. Absent for a static font. |
+| `list_instance` | number | 1.2, optional. The instance a font list shows, as a position in `instances`: for an italic file (`style` `italic`, `Italic` in the file name, or every instance's name ending in `Italic`) the one named `Italic`, else the one named `Regular`. Absent when there is no such instance: the list shows the default instance (the axis defaults). Many italic variable fonts default to Thin, which is why the default isn't always the right choice. |
+| `sample_script` | string | 1.2, optional. The file's own preview script, when it isn't the family's `sample_script` (Rasa's italic has no Gujarati and shows Latin). |
+| `sample_text` | string | 1.2, optional. The file's own preview text, at most 60 characters, when no script sample fits it. |
+
 A client verifies a downloaded file's size, then its sha256, then that it parses as a font, before writing it. It verifies a licence's size and sha256.
+
+### Preview text
+
+A file's preview text is its `sample_text` if it has one, else the `samples` entry of its `sample_script`, else of its family's `sample_script`. The family name is shown in the font itself as well. For each file, the generator:
+
+1. Takes the script: METADATA.pb's `primary_script` for Google Fonts, the notofonts repository's script or the CJK region (`JP` `Jpan`, `KR` `Kore`, `SC` `Hans`, `TC` and `HK` `Hant`) for Noto. Without one, it is `Latn` if the file maps 90% of the Latin sample's letters, else the script with the most code points in the file's character map (by Unicode Script property, leaving out Common, Inherited and Latin), else `Zsym`.
+2. Uses the script's sample if the file maps at least 80% of its non-space characters.
+3. Otherwise, if the file maps at least 10 characters of the script above U+0020, its `sample_text` is the first 60 of them, by code point (historic and supplement fonts: Linear A, Duployan, SignWriting, ...).
+4. Otherwise it detects the script again from the character map as in step 1, and uses that script's sample if the file covers 80% of it (Pushster, a Thai family without Thai, shows Latin).
+5. Otherwise its `sample_text` is its own characters of the step 1 script, else of the detected one, else its first 60 characters of any script (Noto Emoji, Libre Barcode EAN13 Text).
+
+The family's `sample_script` is the script most of its files end up with (the step 1 script on a tie). A file whose script differs carries its own `sample_script`.
 
 ### Example
 
@@ -215,12 +250,15 @@ A client verifies a downloaded file's size, then its sha256, then that it parses
  "scripts":[
 {"id":"Cyrl","name":"Cyrillic"},
 ...],
+ "samples":{
+"Cyrl":{"text":"Принимая во внимание, что признание достоинства,","method":"udhr","language":"ru_Cyrl"},
+...},
  "families":[
 {"family":"Noto Sans CJK JP","source":"notofonts","designer":"Ryoko NISHIZUKA ...","categories":["SANS_SERIF"],
  "subsets":[],"languages":[0,4,7,18],"scripts":["Cyrl","Hans","Hant","Jpan","Kore","Latn"],
  "license":"OFL","license_path":null,
  "license_file":{"path":"LICENSE","size":4301,"sha256":"6a73f954..."},
- "repo":"notofonts/noto-cjk","ref":"Sans2.004",
+ "repo":"notofonts/noto-cjk","ref":"Sans2.004","sample_script":"Jpan",
  "files":[{"path":"Sans/OTF/Japanese/NotoSansCJKjp-Black.otf","size":17828280,"sha256":"...",
    "style":"normal","weight":900,"axes":[],"postscript":["NotoSansCJKjp-Black"]},
    ...]},
@@ -228,10 +266,13 @@ A client verifies a downloaded file's size, then its sha256, then that it parses
  "subsets":[],"languages":[0,2,3],"scripts":["Latn","Mymr"],
  "license":"OFL","license_path":null,
  "license_file":{"path":"OFL.txt","size":4383,"sha256":"246a7585...","repo":"notofonts/myanmar","ref":"NotoSerifMyanmar-v2.106"},
+ "sample_script":"Mymr",
  "files":[{"path":"fonts/NotoSerifMyanmar/full/variable-ttf/NotoSerifMyanmar[wdth,wght].ttf","size":...,
    "sha256":"...","style":"normal","weight":400,
    "axes":[{"tag":"wght","min":100.0,"max":900.0},{"tag":"wdth","min":62.5,"max":100.0}],
-   "postscript":["NotoSerifMyanmar-Black","NotoSerifMyanmar-Bold","..."]}]},
+   "postscript":["NotoSerifMyanmar-Black","NotoSerifMyanmar-Bold","..."],
+   "instances":[{"name":"Thin","coordinates":{"wght":100.0,"wdth":100.0}},...,{"name":"Regular","coordinates":{"wght":400.0,"wdth":100.0}},...],
+   "list_instance":3}]},
 ...]}
 ```
 
@@ -244,11 +285,11 @@ The second file's URLs are `https://cdn.jsdelivr.net/gh/notofonts/notofonts.gith
 From a checkout of google/fonts (sparse: `ofl/`, `apache/`, `ufl/`, `tags/` and `lang/Lib/gflanguages/data/`):
 
 - every `{ofl,apache,ufl}/*/METADATA.pb`, parsed as protobuf text format;
-- every font file a METADATA.pb lists, which it hashes and reads with [skrifa](https://crates.io/crates/skrifa) for axes, PostScript names and the character map;
+- every font file a METADATA.pb lists, which it hashes and reads with [skrifa](https://crates.io/crates/skrifa) for axes, named instances, PostScript names and the character map;
 - each family's licence file, which it hashes, and the copyright lines and Reserved Font Names at its top;
 - each Apache family's `NOTICE` file, if any, which it hashes;
 - `tags/all/families.csv`, for the tags;
-- the gflanguages data, for language names, scripts and exemplar characters. The Noto generator uses it too.
+- the gflanguages data, for language names, scripts, exemplar characters and UDHR sample texts. The Noto generator uses it too.
 
 ### Noto
 

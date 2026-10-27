@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::lang::LangData;
 use crate::licence::{copyright_header, reserved_names};
 use crate::pb::{self, Val, parse_pb};
+use crate::sample;
 use crate::tags::{Curation, GoogleTags};
 use crate::{IndexHeader, MAX_FONT_BYTES, file_record, finish_index, is_commit, license_record};
 
@@ -176,6 +177,7 @@ fn family_entry(
         None => google_tags.tags_for(&family, &cats),
     };
 
+    let primary = msg.str("primary_script").filter(|s| !s.is_empty());
     let mut cmap = BTreeSet::new();
     let mut files = Vec::new();
     for f in msg.all("fonts").filter_map(Val::as_msg) {
@@ -221,19 +223,23 @@ fn family_entry(
         let weight = f.num("weight").map_or(400, |w| w.clamp(1.0, 1000.0) as u32);
         let style = f.str("style").unwrap_or("normal");
         let extra_ps = f.str("post_script_name").map(str::to_string);
-        files.push(file_record(
+        let pick = sample::pick(&lang.samples, primary, &info.codepoints);
+        let mut rec = file_record(
             format!("{dir}/{name}/{filename}"),
             &data,
             info,
             style,
             weight,
             extra_ps,
-        ));
+        );
+        sample::apply(&mut rec, pick);
+        files.push(rec);
     }
     if files.is_empty() {
         return Err("no usable font files".into());
     }
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    let sample_script = sample::settle(&mut files, primary);
 
     // Declared languages plus the ones the font's code points cover.
     let mut languages: BTreeSet<String> = strings(&msg, "languages").into_iter().collect();
@@ -287,6 +293,7 @@ fn family_entry(
     if let Some(u) = upstream {
         fam["upstream"] = json!(u);
     }
+    fam["sample_script"] = json!(sample_script);
     fam["files"] = json!(files);
     Ok(Some(fam))
 }
