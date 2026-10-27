@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 
 use crate::font::{FontInfo, read_font};
 use crate::lang::LangData;
+use crate::licence::{copyright_header, reserved_names};
+use crate::tags::{Curation, from_category};
 use crate::{
     IndexHeader, MAX_FONT_BYTES, file_record, finish_index, is_commit, is_ref, license_record,
 };
@@ -200,6 +202,15 @@ fn category(family: &str) -> &'static str {
     }
 }
 
+/// The copyright lines at the top of the licence file at `path`, if it has any.
+fn licence_header(path: &Path) -> Option<String> {
+    let m = std::fs::symlink_metadata(path).ok()?;
+    if !m.is_file() || m.len() > 1024 * 1024 {
+        return None;
+    }
+    copyright_header(&String::from_utf8_lossy(&std::fs::read(path).ok()?))
+}
+
 struct Candidate {
     family: String,
     files: Vec<Value>,
@@ -207,6 +218,8 @@ struct Candidate {
     designer: Option<String>,
     scripts: BTreeSet<String>,
     license_file: Value,
+    /// The copyright notice at the top of the licence file.
+    copyright: Option<String>,
     /// The family's own `repo` and `ref`, when they aren't the index's.
     repo_ref: Option<(String, String)>,
 }
@@ -424,6 +437,7 @@ fn script_candidates(
                         continue;
                     }
                 };
+            let copyright = licence_header(&lic);
             for g in groups {
                 let (name, files, cmap, designer) = g.best_build().into_parts();
                 out.push(Candidate {
@@ -437,6 +451,7 @@ fn script_candidates(
                         .into_iter()
                         .collect(),
                     license_file: license_file.clone(),
+                    copyright: copyright.clone(),
                     repo_ref: None,
                 });
             }
@@ -509,6 +524,7 @@ fn cjk_candidates(
                 designer,
                 scripts,
                 license_file,
+                copyright: licence_header(&root.join(&lic)),
                 repo_ref: Some((CJK_REPO.to_string(), tag.clone())),
             });
         }
@@ -526,6 +542,7 @@ pub fn build_index(
     warnings: &mut Vec<String>,
 ) -> Result<(Value, Counts), String> {
     let manifest = Manifest::load(mirror)?;
+    let curation = Curation::load_default()?;
     let mut counts = Counts::default();
     let gf: BTreeMap<String, &Value> = google["families"]
         .as_array()
@@ -576,6 +593,26 @@ pub fn build_index(
                 json!([category(&c.family)]),
             ),
         };
+        let tags: Vec<String> = match curation.get(&c.family) {
+            Some(t) => t.to_vec(),
+            None => match ours {
+                Some(g) => g["tags"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect(),
+                None => from_category(category(&c.family))
+                    .map(str::to_string)
+                    .into_iter()
+                    .collect(),
+            },
+        };
+        let reserved = c
+            .copyright
+            .as_deref()
+            .map(reserved_names)
+            .unwrap_or_default();
         let mut fam = json!({
             "family": c.family,
             "source": SOURCE_ID,
@@ -587,7 +624,12 @@ pub fn build_index(
             "license": "OFL",
             "license_path": null,
             "license_file": c.license_file,
+            "tags": tags,
+            "reserved_names": reserved,
         });
+        if let Some(cp) = &c.copyright {
+            fam["copyright"] = json!(cp);
+        }
         if let Some((repo, r)) = c.repo_ref {
             fam["repo"] = json!(repo);
             fam["ref"] = json!(r);

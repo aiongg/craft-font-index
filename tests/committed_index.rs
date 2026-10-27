@@ -126,6 +126,31 @@ fn check_index(idx: &Value, licenses: &[&str]) {
             assert!(lf["size"].as_u64().unwrap() > 0, "{name}");
             cfi::file_urls(idx, fam, lf).unwrap();
         }
+        // 1.2 fields.
+        let tags = strs(&fam["tags"]);
+        assert!(!tags.is_empty(), "{name}: no tags");
+        assert!(
+            tags.windows(2).all(|w| w[0] < w[1]),
+            "{name}: tags are not sorted and unique"
+        );
+        for t in &tags {
+            assert!(cfi::tags::VOCABULARY.contains(t), "{name}: unknown tag {t}");
+        }
+        for r in strs(&fam["reserved_names"]) {
+            assert!(!r.trim().is_empty(), "{name}: empty reserved name");
+        }
+        assert!(fam["reserved_names"].is_array(), "{name}");
+        if let Some(c) = fam.get("copyright") {
+            assert!(!c.as_str().unwrap().trim().is_empty(), "{name}");
+        }
+        if let Some(u) = fam.get("upstream") {
+            assert!(u.as_str().unwrap().starts_with("https://"), "{name}");
+        }
+        if let Some(nf) = fam.get("notice_file") {
+            assert!(is_hex(nf["sha256"].as_str().unwrap(), 64), "{name}");
+            assert!(nf["size"].as_u64().unwrap() > 0, "{name}");
+            cfi::file_urls(idx, fam, nf).unwrap();
+        }
 
         let files = fam["files"].as_array().unwrap();
         assert!(!files.is_empty() && files.len() <= 1024);

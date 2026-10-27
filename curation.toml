@@ -1,0 +1,6 @@
+# Hand-written family tags. An entry replaces the tags the generators compute for that family,
+# in every index. One line per family, in TOML syntax: the exact family name in double quotes,
+# then a list of tags from the taxonomy in README.md (`Group/Trait`, `Monospace`, or a bare
+# `Sans`, `Serif`, `Display`):
+#
+#   "Example Family" = ["Display/Playful", "Feeling/Loud"]

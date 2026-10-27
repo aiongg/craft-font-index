@@ -9,9 +9,11 @@
 pub mod font;
 pub mod google;
 pub mod lang;
+pub mod licence;
 pub mod noto;
 pub mod pb;
 pub mod sources;
+pub mod tags;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -26,7 +28,7 @@ pub use google::{LICENSE_DIRS, build_index};
 
 /// Format version, `MAJOR.MINOR`. Readers reject an unknown major version; a minor version
 /// only adds fields.
-pub const VERSION: &str = "1.1";
+pub const VERSION: &str = "1.2";
 /// The major version as a number, the field photocraft#2453's reader checks.
 pub const SCHEMA: u32 = 1;
 

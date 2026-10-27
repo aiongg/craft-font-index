@@ -26,7 +26,7 @@ if [ ! -d "$checkout/.git" ]; then
   git -C "$checkout" init -q
   git -C "$checkout" remote add origin "$remote"
 fi
-git -C "$checkout" sparse-checkout set --no-cone '/ofl/' '/apache/' '/ufl/' '/lang/Lib/gflanguages/data/'
+git -C "$checkout" sparse-checkout set --no-cone '/ofl/' '/apache/' '/ufl/' '/tags/' '/lang/Lib/gflanguages/data/'
 echo "fetching google/fonts@$commit into $checkout"
 git -C "$checkout" fetch -q --depth 1 --filter=blob:none origin "$commit"
 git -C "$checkout" checkout -q --detach FETCH_HEAD

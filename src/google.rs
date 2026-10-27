@@ -10,13 +10,16 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::lang::LangData;
+use crate::licence::{copyright_header, reserved_names};
 use crate::pb::{self, Val, parse_pb};
+use crate::tags::{Curation, GoogleTags};
 use crate::{IndexHeader, MAX_FONT_BYTES, file_record, finish_index, is_commit, license_record};
 
 pub const SOURCE_ID: &str = "google/fonts";
 pub const REPO: &str = "google/fonts";
 pub const LICENSE_DIRS: &[&str] = &["ofl", "apache", "ufl"];
 const LICENSE_FILES: &[&str] = &["OFL.txt", "LICENSE.txt", "UFL.txt"];
+const NOTICE_FILES: &[&str] = &["NOTICE", "NOTICE.txt", "NOTICE.md"];
 
 /// Builds the index for the checkout at `repo`. With `only`, just the family directories named
 /// there (`ofl/lato`, or `lato` in any licence directory). Per-family problems go to `warnings`.
@@ -30,6 +33,8 @@ pub fn build_index(
         return Err(format!("commit `{commit}` is not a full lowercase hex sha"));
     }
     let lang = LangData::load(repo, warnings)?;
+    let google_tags = GoogleTags::load(repo, warnings);
+    let curation = Curation::load_default()?;
     let mut families: Vec<Value> = Vec::new();
     for d in LICENSE_DIRS {
         let Ok(rd) = std::fs::read_dir(repo.join(d)) else {
@@ -52,7 +57,7 @@ pub fn build_index(
             if !meta.is_dir() {
                 continue;
             }
-            match family_entry(repo, d, &name, &lang, warnings) {
+            match family_entry(repo, d, &name, &lang, &google_tags, &curation, warnings) {
                 Ok(Some(f)) => families.push(f),
                 Ok(None) => {}
                 Err(w) => warnings.push(format!("{d}/{name}: {w}")),
@@ -85,6 +90,8 @@ fn family_entry(
     dir: &str,
     name: &str,
     lang: &LangData,
+    google_tags: &GoogleTags,
+    curation: &Curation,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Value>, String> {
     let fam_dir = repo.join(dir).join(name);
@@ -120,6 +127,53 @@ fn family_entry(
             .map_err(|e| warnings.push(format!("{dir}/{name}: {e}")))
             .ok(),
         None => None,
+    };
+
+    let notice_file = NOTICE_FILES
+        .iter()
+        .find(|l| std::fs::symlink_metadata(fam_dir.join(l)).is_ok_and(|m| m.is_file()))
+        .and_then(|l| {
+            let p = format!("{dir}/{name}/{l}");
+            license_record(&repo.join(&p), &p, None)
+                .map_err(|e| warnings.push(format!("{dir}/{name}: {e}")))
+                .ok()
+        });
+    // METADATA.pb's per-font copyright, else the notice at the top of the licence file.
+    let ofl_header = license_path.as_ref().and_then(|p| {
+        let m = std::fs::symlink_metadata(repo.join(p)).ok()?;
+        if m.len() > 1024 * 1024 {
+            return None;
+        }
+        copyright_header(&String::from_utf8_lossy(&std::fs::read(repo.join(p)).ok()?))
+    });
+    let copyright = msg
+        .all("fonts")
+        .filter_map(Val::as_msg)
+        .find_map(|f| f.str("copyright").filter(|c| !c.trim().is_empty()))
+        .map(str::to_string)
+        .or_else(|| ofl_header.clone());
+    let reserved = if license == "OFL" {
+        let from_header = ofl_header
+            .as_deref()
+            .map(reserved_names)
+            .unwrap_or_default();
+        if from_header.is_empty() {
+            copyright.as_deref().map(reserved_names).unwrap_or_default()
+        } else {
+            from_header
+        }
+    } else {
+        Vec::new()
+    };
+    let upstream = msg
+        .all("source")
+        .filter_map(Val::as_msg)
+        .find_map(|s| s.str("repository_url").filter(|u| !u.is_empty()))
+        .map(str::to_string);
+    let cats: Vec<&str> = categories.iter().map(String::as_str).collect();
+    let tags: Vec<String> = match curation.get(&family) {
+        Some(t) => t.to_vec(),
+        None => google_tags.tags_for(&family, &cats),
     };
 
     let mut cmap = BTreeSet::new();
@@ -210,7 +264,7 @@ fn family_entry(
         }
     }
 
-    Ok(Some(json!({
+    let mut fam = json!({
         "family": family,
         "source": SOURCE_ID,
         "designer": designer,
@@ -221,6 +275,18 @@ fn family_entry(
         "license": license,
         "license_path": license_path,
         "license_file": license_file,
-        "files": files,
-    })))
+        "tags": tags,
+        "reserved_names": reserved,
+    });
+    if let Some(c) = copyright {
+        fam["copyright"] = json!(c);
+    }
+    if let Some(n) = notice_file {
+        fam["notice_file"] = n;
+    }
+    if let Some(u) = upstream {
+        fam["upstream"] = json!(u);
+    }
+    fam["files"] = json!(files);
+    Ok(Some(fam))
 }

@@ -42,7 +42,7 @@ The indexes and `sources.json` are JSON objects. All lists are sorted, and the s
 
 A minor version only adds fields. Any other change (removing or renaming a field, or changing a field's meaning or type) is a new major version. `schema` holds the major version as a number. photocraft#2453's reader checks that field.
 
-The current version is `1.1`. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
+The current version is `1.2`. Version 1.1 had no `tags`, `copyright`, `reserved_names`, `notice_file` or `upstream`; a 1.1 reader ignores them. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
 
 ### sources.json
 
@@ -141,9 +141,51 @@ A `repo` is `owner/name` and a `ref` is made of `A-Z a-z 0-9 . _ -`, so neither 
 | `license_path` | string or null | Format 1.0: the licence file in google/fonts (`ofl/lato/OFL.txt`), relative to `base_url`. Null in other sources. |
 | `license_file` | object or null | 1.1. The licence file: `path`, `size`, `sha256`, and `repo` and `ref` when it isn't in the family's repository at the family's ref. Located like a font file. Null only when google/fonts has no licence file for the family. |
 | `repo`, `ref` | string | 1.1, optional. Where the family's files are, when that isn't the top-level `repo` and `ref` (the Noto CJK families are in notofonts/noto-cjk at a release tag). |
+| `tags` | string array | 1.2. Design traits, sorted, each from the vocabulary below. Never empty for a family with a category; see "Tags". |
+| `copyright` | string | 1.2, optional. The copyright notice: METADATA.pb's `copyright` of the family's first font, else the lines at the top of the licence file, joined by spaces. |
+| `reserved_names` | string array | 1.2. The Reserved Font Names the OFL notice declares (`with Reserved Font Names "Abril" and "Abril Fatface"` gives `Abril`, `Abril Fatface`). Empty when none. A client that modifies a font must rename it if this isn't empty. |
+| `notice_file` | object | 1.2, optional. An Apache family's `NOTICE` file: `path`, `size`, `sha256`, located like `license_file`. Absent when the family ships none. |
+| `upstream` | string | 1.2, optional. METADATA.pb's `source.repository_url`: where the family is developed. |
 | `files` | array | The font files, sorted by path |
 
 `languages` holds the languages the source declares (google/fonts METADATA.pb), plus every living language whose base exemplar characters are all in the family's character map. A living language is one with a known speaker population that is not marked historical. Families refer to languages by position because that halves the index size. `scripts` holds the scripts of those languages, plus the family's own script: METADATA.pb's `primary_script` and the scripts of its subsets for Google Fonts, the script of the notofonts repository or CJK region for Noto.
+
+### Tags
+
+A tag is `Group/Trait`, `Monospace`, or a bare `Sans`, `Serif` or `Display` when only the category is known.
+
+| Tag | Google Fonts tag paths (`tags/all/families.csv`) |
+|---|---|
+| `Sans/Geometric` | `/Sans/Geometric` |
+| `Sans/Humanist` | `/Sans/Humanist` |
+| `Sans/Grotesque` | `/Sans/Grotesque`, `/Sans/Neo Grotesque` |
+| `Sans/Rounded` | `/Sans/Rounded` |
+| `Serif/Old style` | `/Serif/Old Style Garalde`, `/Serif/Humanist Venetian` |
+| `Serif/Transitional` | `/Serif/Transitional` |
+| `Serif/Modern` | `/Serif/Modern`, `/Serif/Fat Face` |
+| `Serif/Slab` | `/Slab/*` |
+| `Script/Handwritten` | `/Script/Handwritten` |
+| `Script/Informal` | `/Script/Informal` |
+| `Script/Formal` | `/Script/Formal`, `/Script/Upright Script` |
+| `Script/Brush` | `/Theme/Brush` |
+| `Display/Playful` | `/Expressive/Playful`, `/Theme/Wacky` |
+| `Display/Vintage` | `/Expressive/Vintage`, `/Theme/Woodtype`, `/Theme/Art Nouveau` |
+| `Display/Futuristic` | `/Expressive/Futuristic`, `/Theme/Techno` |
+| `Display/Blackletter` | `/Theme/Blackletter` |
+| `Display/Pixel` | `/Theme/Pixel` |
+| `Display/Stencil` | `/Theme/Stencil` |
+| `Display/Distressed` | `/Theme/Distressed` |
+| `Feeling/Calm` | `/Expressive/Calm` |
+| `Feeling/Business` | `/Expressive/Business` |
+| `Feeling/Elegant` | `/Expressive/Sophisticated`, `/Expressive/Fancy` |
+| `Feeling/Cute` | `/Expressive/Cute` |
+| `Feeling/Loud` | `/Expressive/Loud` |
+| `Feeling/Artistic` | `/Expressive/Artistic` |
+| `Monospace` | `/Monospace/Monospace`, and METADATA.pb category `MONOSPACE` |
+
+Google Fonts: a family gets each tag above that one of its tag rows reaches with a score of at least 50. Only rows with an empty axes column count. When no tag maps, the METADATA.pb `category` gives one: `SANS_SERIF` is `Sans`, `SERIF` is `Serif`, `DISPLAY` is `Display`, `HANDWRITING` is `Script/Handwritten`, `MONOSPACE` is `Monospace`. Noto families that are also in the Google Fonts index take that family's tags; the others get the tag of the category the generator derives from the name: `Monospace` for a `Mono` word, `Serif` for `Serif` (and a few serif scripts), `Sans` for `Sans`, else `Display`.
+
+`curation.toml` in the repository root replaces the computed tags of a family, in every index. It has one line per family, `"Family name" = ["Display/Playful"]`.
 
 ### File
 
@@ -163,7 +205,7 @@ A client verifies a downloaded file's size, then its sha256, then that it parses
 ### Example
 
 ```json
-{"schema":1,"version":"1.1","source":"notofonts","commit":"93fac8a...",
+{"schema":1,"version":"1.2","source":"notofonts","commit":"93fac8a...",
  "source_info":{"id":"notofonts","name":"Noto","homepage":"https://notofonts.github.io","curated":true,
    "file_urls":["https://cdn.jsdelivr.net/gh/{repo}@{ref}/{path}","https://raw.githubusercontent.com/{repo}/{ref}/{path}"]},
  "repo":"notofonts/notofonts.github.io","ref":"93fac8a...",
@@ -199,11 +241,13 @@ The second file's URLs are `https://cdn.jsdelivr.net/gh/notofonts/notofonts.gith
 
 ### Google Fonts
 
-From a checkout of google/fonts (sparse: `ofl/`, `apache/`, `ufl/` and `lang/Lib/gflanguages/data/`):
+From a checkout of google/fonts (sparse: `ofl/`, `apache/`, `ufl/`, `tags/` and `lang/Lib/gflanguages/data/`):
 
 - every `{ofl,apache,ufl}/*/METADATA.pb`, parsed as protobuf text format;
 - every font file a METADATA.pb lists, which it hashes and reads with [skrifa](https://crates.io/crates/skrifa) for axes, PostScript names and the character map;
-- each family's licence file, which it hashes;
+- each family's licence file, which it hashes, and the copyright lines and Reserved Font Names at its top;
+- each Apache family's `NOTICE` file, if any, which it hashes;
+- `tags/all/families.csv`, for the tags;
 - the gflanguages data, for language names, scripts and exemplar characters. The Noto generator uses it too.
 
 ### Noto
