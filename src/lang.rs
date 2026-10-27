@@ -1,10 +1,11 @@
 //! The gflanguages data in google/fonts (`lang/Lib/gflanguages/data`): languages with their
-//! script and base exemplar characters, and the script list.
+//! script, base exemplar characters and UDHR sample text, and the script list.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::pb::{Val, parse_pb};
+use crate::sample::{self, Sample};
 
 pub const DATA_DIR: &str = "lang/Lib/gflanguages/data";
 
@@ -17,6 +18,11 @@ pub struct Language {
     /// Every code point of the base exemplar characters. Empty when the data has none, in
     /// which case coverage is never inferred for the language.
     pub base: BTreeSet<u32>,
+    /// The base exemplar characters as written in the data.
+    pub exemplar: Option<String>,
+    /// UDHR text from `sample_text`: `styles` (the sentence fonts.google.com shows), else the
+    /// first of the longer fields in [`SAMPLE_FIELDS`].
+    pub sample_text: Option<String>,
     pub historical: bool,
     pub population: u64,
 }
@@ -27,7 +33,22 @@ pub struct LangData {
     pub script_by_name: BTreeMap<String, String>,
     /// Script name by ISO 15924 code.
     pub scripts: BTreeMap<String, String>,
+    /// The default preview sample by ISO 15924 code ([`sample::choose`]).
+    pub samples: BTreeMap<String, Sample>,
 }
+
+/// `sample_text` fields, best first.
+pub const SAMPLE_FIELDS: &[&str] = &[
+    "styles",
+    "tester",
+    "specimen_48",
+    "specimen_36",
+    "specimen_32",
+    "specimen_21",
+    "specimen_16",
+    "poster_sm",
+    "poster_md",
+];
 
 /// google/fonts subset names that are not a script name in the lang data.
 const SUBSET_SCRIPTS: &[(&str, &str)] = &[
@@ -156,12 +177,21 @@ impl LangData {
             else {
                 continue;
             };
-            let base = m
+            let exemplar = m
                 .all("exemplar_chars")
                 .filter_map(Val::as_msg)
                 .find_map(|e| e.str("base"))
-                .map(exemplar_codepoints)
-                .unwrap_or_default();
+                .filter(|b| !b.is_empty());
+            let base = exemplar.map(exemplar_codepoints).unwrap_or_default();
+            let sample_text = m
+                .all("sample_text")
+                .filter_map(Val::as_msg)
+                .next()
+                .and_then(|t| {
+                    SAMPLE_FIELDS
+                        .iter()
+                        .find_map(|f| t.str(f).filter(|s| !s.is_empty()))
+                });
             languages.push(Language {
                 id: id.to_string(),
                 name: m.str("preferred_name").unwrap_or(name).to_string(),
@@ -171,14 +201,18 @@ impl LangData {
                     .map(str::to_string),
                 script: script.to_string(),
                 base,
+                exemplar: exemplar.map(str::to_string),
+                sample_text: sample_text.map(str::to_string),
                 historical: m.str("historical") == Some("true"),
                 population: m.num("population").map_or(0, |n| n.max(0.0) as u64),
             });
         }
+        let samples = sample::choose(&languages);
         Ok(LangData {
             languages,
             script_by_name,
             scripts,
+            samples,
         })
     }
 

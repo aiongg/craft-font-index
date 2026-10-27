@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use crate::font::{FontInfo, read_font};
 use crate::lang::LangData;
 use crate::licence::{copyright_header, reserved_names};
+use crate::sample;
 use crate::tags::{Curation, from_category};
 use crate::{
     IndexHeader, MAX_FONT_BYTES, file_record, finish_index, is_commit, is_ref, license_record,
@@ -217,11 +218,20 @@ struct Candidate {
     cmap: BTreeSet<u32>,
     designer: Option<String>,
     scripts: BTreeSet<String>,
+    sample_script: Option<String>,
     license_file: Value,
     /// The copyright notice at the top of the licence file.
     copyright: Option<String>,
     /// The family's own `repo` and `ref`, when they aren't the index's.
     repo_ref: Option<(String, String)>,
+}
+
+struct Parts {
+    family: String,
+    files: Vec<Value>,
+    cmap: BTreeSet<u32>,
+    designer: Option<String>,
+    sample_script: Option<String>,
 }
 
 /// A family as read from its files.
@@ -255,15 +265,25 @@ impl Group {
         self
     }
 
-    fn into_parts(self) -> (String, Vec<Value>, BTreeSet<u32>, Option<String>) {
+    /// The family name, its files with their samples ([`sample::pick`] for `primary`), the
+    /// union of their code points, the designer and the family's `sample_script`.
+    fn into_parts(self, lang: &LangData, primary: Option<&str>) -> Parts {
         let mut cmap = BTreeSet::new();
         let mut files = Vec::new();
-        for (f, c) in self.files {
+        for (mut f, c) in self.files {
+            sample::apply(&mut f, sample::pick(&lang.samples, primary, &c));
             cmap.extend(c);
             files.push(f);
         }
         files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
-        (self.family, files, cmap, self.designer)
+        let sample_script = sample::settle(&mut files, primary);
+        Parts {
+            family: self.family,
+            files,
+            cmap,
+            designer: self.designer,
+            sample_script,
+        }
     }
 }
 
@@ -438,18 +458,18 @@ fn script_candidates(
                     }
                 };
             let copyright = licence_header(&lic);
+            // The repository's script, for Noto what METADATA.pb's primary_script is for
+            // Google Fonts.
+            let primary = lang.subset_script(repo);
             for g in groups {
-                let (name, files, cmap, designer) = g.best_build().into_parts();
+                let p = g.best_build().into_parts(lang, primary);
                 out.push(Candidate {
-                    family: name,
-                    files,
-                    cmap,
-                    designer,
-                    scripts: lang
-                        .subset_script(repo)
-                        .map(str::to_string)
-                        .into_iter()
-                        .collect(),
+                    family: p.family,
+                    files: p.files,
+                    cmap: p.cmap,
+                    designer: p.designer,
+                    scripts: primary.map(str::to_string).into_iter().collect(),
+                    sample_script: p.sample_script,
                     license_file: license_file.clone(),
                     copyright: copyright.clone(),
                     repo_ref: None,
@@ -462,6 +482,7 @@ fn script_candidates(
 
 fn cjk_candidates(
     mirror: &Path,
+    lang: &LangData,
     manifest: &Manifest,
     only: Option<&[String]>,
     counts: &mut Counts,
@@ -495,7 +516,12 @@ fn cjk_candidates(
             if !wanted(only, &g.family) {
                 continue;
             }
-            let (family, files, cmap, designer) = g.into_parts();
+            let region = CJK_REGIONS
+                .iter()
+                .find(|(r, _)| g.family.ends_with(&format!(" {r}")))
+                .map(|(_, s)| *s);
+            let p = g.into_parts(lang, region);
+            let (family, files, cmap, designer) = (p.family, p.files, p.cmap, p.designer);
             // Serif releases keep the licence in `Serif/`, Sans releases at the top.
             let lic = [
                 format!("{}/LICENSE", dirs[0].split('/').next().unwrap_or("")),
@@ -523,6 +549,7 @@ fn cjk_candidates(
                 cmap,
                 designer,
                 scripts,
+                sample_script: p.sample_script,
                 license_file,
                 copyright: licence_header(&root.join(&lic)),
                 repo_ref: Some((CJK_REPO.to_string(), tag.clone())),
@@ -553,6 +580,7 @@ pub fn build_index(
     let mut candidates = script_candidates(mirror, lang, only, &mut counts, warnings)?;
     candidates.extend(cjk_candidates(
         mirror,
+        lang,
         &manifest,
         only,
         &mut counts,
@@ -634,6 +662,7 @@ pub fn build_index(
             fam["repo"] = json!(repo);
             fam["ref"] = json!(r);
         }
+        fam["sample_script"] = json!(c.sample_script);
         fam["files"] = json!(c.files);
         families.push(fam);
     }

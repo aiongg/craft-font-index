@@ -9,6 +9,9 @@ pub struct FontInfo {
     /// `None` when the font could not be parsed (axes unknown), `Some(vec![])` for static fonts.
     pub axes: Option<Vec<(String, f32, f32)>>,
     pub postscript: Vec<String>,
+    /// The `fvar` named instances: subfamily name and the user coordinate of every axis, in
+    /// axis order.
+    pub instances: Vec<(String, Vec<(String, f32)>)>,
     /// Mapped code points, for language coverage.
     pub codepoints: BTreeSet<u32>,
     /// Typographic family name (name ID 16), else name ID 1.
@@ -45,7 +48,19 @@ pub fn read_font(data: &[u8]) -> FontInfo {
         .iter()
         .map(|a| (a.tag().to_string(), a.min_value(), a.max_value()))
         .collect();
+    let mut instances = Vec::new();
     for inst in font.named_instances().iter() {
+        let name = font
+            .localized_strings(inst.subfamily_name_id())
+            .next()
+            .map(|s| s.chars().collect::<String>())
+            .unwrap_or_default();
+        let coords = axes
+            .iter()
+            .map(|(t, _, _)| t.clone())
+            .zip(inst.user_coords())
+            .collect();
+        instances.push((name, coords));
         let own = inst
             .postscript_name_id()
             .and_then(|id| font.localized_strings(id).next())
@@ -81,6 +96,7 @@ pub fn read_font(data: &[u8]) -> FontInfo {
     FontInfo {
         axes: Some(axes),
         postscript: ps,
+        instances,
         codepoints,
         family: first(StringId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| first(StringId::FAMILY_NAME)),
         designer: first(StringId::DESIGNER),

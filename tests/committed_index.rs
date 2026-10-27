@@ -82,6 +82,22 @@ fn check_index(idx: &Value, licenses: &[&str]) {
         assert!(l["population"].is_u64() && l["historical"].is_boolean());
     }
 
+    let samples = idx["samples"].as_object().unwrap();
+    for (script, sample) in samples {
+        assert!(
+            script.len() == 4 && script.is_ascii(),
+            "sample script {script}"
+        );
+        let text = sample["text"].as_str().unwrap();
+        assert!(
+            !text.trim().is_empty() && text.chars().count() <= 60,
+            "{script}"
+        );
+        let method = sample["method"].as_str().unwrap();
+        assert!(["udhr", "iroha", "exemplar"].contains(&method), "{script}");
+        assert!(!sample["language"].as_str().unwrap().is_empty(), "{script}");
+    }
+
     let families = idx["families"].as_array().unwrap();
     let mut names = BTreeSet::new();
     let mut urls = BTreeSet::new();
@@ -197,6 +213,49 @@ fn check_index(idx: &Value, licenses: &[&str]) {
                 assert!(
                     faces.insert((style, weight, width.to_bits())),
                     "{name}: two static files for {style} {weight} {width}"
+                );
+            }
+            // Every file shows a sample: its own text, or its script's (the family's unless the
+            // file names its own).
+            let script = f
+                .get("sample_script")
+                .unwrap_or(&fam["sample_script"])
+                .as_str()
+                .unwrap_or_else(|| panic!("{path}: no sample script"));
+            match f.get("sample_text") {
+                Some(t) => {
+                    let t = t.as_str().unwrap();
+                    assert!(!t.is_empty() && t.chars().count() <= 60, "{path}");
+                }
+                None => assert!(
+                    samples.contains_key(script),
+                    "{path}: no sample for {script}"
+                ),
+            }
+            let instances = f
+                .get("instances")
+                .map_or(&[][..], |i| i.as_array().unwrap());
+            let axes: Vec<&str> = f["axes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["tag"].as_str().unwrap())
+                .collect();
+            for i in instances {
+                let coords = i["coordinates"].as_object().unwrap();
+                assert!(i["name"].is_string(), "{path}");
+                assert_eq!(
+                    coords.keys().map(String::as_str).collect::<Vec<_>>(),
+                    axes,
+                    "{path}"
+                );
+            }
+            if let Some(li) = f.get("list_instance") {
+                let li = li.as_u64().unwrap() as usize;
+                assert!(li < instances.len(), "{path}");
+                assert!(
+                    ["Regular", "Italic"].contains(&instances[li]["name"].as_str().unwrap()),
+                    "{path}"
                 );
             }
             let ps = strs(&f["postscript"]);

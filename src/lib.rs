@@ -12,6 +12,7 @@ pub mod lang;
 pub mod licence;
 pub mod noto;
 pub mod pb;
+pub mod sample;
 pub mod sources;
 pub mod tags;
 
@@ -80,6 +81,11 @@ pub(crate) fn file_record(
     ps.extend(info.postscript);
     ps.sort();
     ps.dedup();
+    let italic = style == "italic"
+        || path
+            .rsplit('/')
+            .next()
+            .is_some_and(|n| n.contains("Italic"));
     let axes: Vec<Value> = info
         .axes
         .unwrap_or_default()
@@ -98,7 +104,32 @@ pub(crate) fn file_record(
     if (info.width - 100.0).abs() > 0.01 {
         rec["width"] = json!(info.width);
     }
+    if !info.instances.is_empty() {
+        let instances: Vec<Value> = info
+            .instances
+            .iter()
+            .map(|(name, coords)| {
+                let c: serde_json::Map<String, Value> =
+                    coords.iter().map(|(t, v)| (t.clone(), json!(v))).collect();
+                json!({"name": name, "coordinates": c})
+            })
+            .collect();
+        rec["instances"] = json!(instances);
+    }
+    if let Some(i) = list_instance(&info.instances, italic) {
+        rec["list_instance"] = json!(i);
+    }
     rec
+}
+
+/// The named instance a font list shows: for an italic file (`italic`, or every instance's name
+/// ends in "Italic") the one named "Italic", else the one named "Regular". `None` means the
+/// default instance. Many italic variable fonts default to Thin, hence "Italic".
+pub fn list_instance(instances: &[(String, Vec<(String, f32)>)], italic: bool) -> Option<usize> {
+    let italic =
+        italic || (!instances.is_empty() && instances.iter().all(|(n, _)| n.ends_with("Italic")));
+    let want = if italic { "Italic" } else { "Regular" };
+    instances.iter().position(|(n, _)| n == want)
 }
 
 /// A family's `license_file`: the file at `local`, published at `path` (in `repo_ref` when it
@@ -185,6 +216,25 @@ pub(crate) fn finish_index(
         .iter()
         .map(|code| json!({"id": code, "name": lang.scripts.get(*code).map_or(*code, String::as_str)}))
         .collect();
+    // The sample of every script a family or file names, so a reader can show any of a
+    // family's scripts as well as its own.
+    let sample_scripts: BTreeSet<&str> = families
+        .iter()
+        .flat_map(|f| {
+            let files = f["files"].as_array().into_iter().flatten();
+            f["scripts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(std::iter::once(&f["sample_script"]))
+                .chain(files.map(|x| &x["sample_script"]))
+        })
+        .filter_map(Value::as_str)
+        .collect();
+    let samples: serde_json::Map<String, Value> = sample_scripts
+        .iter()
+        .filter_map(|s| Some((s.to_string(), lang.samples.get(*s)?.to_json())))
+        .collect();
     let mut index = serde_json::Map::new();
     index.insert("schema".into(), json!(SCHEMA));
     index.insert("version".into(), json!(VERSION));
@@ -208,6 +258,7 @@ pub(crate) fn finish_index(
     index.insert("ref".into(), json!(header.commit));
     index.insert("languages".into(), json!(languages));
     index.insert("scripts".into(), json!(scripts));
+    index.insert("samples".into(), Value::Object(samples));
     index.insert("families".into(), json!(families));
     Value::Object(index)
 }
@@ -232,6 +283,18 @@ pub fn to_json(index: &Value) -> String {
                     out.push_str(if j + 1 < fams.len() { ",\n" } else { "\n" });
                 }
                 out.push(']');
+            }
+            ("samples", _) if v.as_object().is_some_and(|o| !o.is_empty()) => {
+                out.push_str("{\n");
+                let o = v.as_object().into_iter().flatten();
+                let n = v.as_object().map_or(0, serde_json::Map::len);
+                for (j, (script, sample)) in o.enumerate() {
+                    out.push_str(&Value::String(script.clone()).to_string());
+                    out.push(':');
+                    out.push_str(&sample.to_string());
+                    out.push_str(if j + 1 < n { ",\n" } else { "\n" });
+                }
+                out.push('}');
             }
             _ => out.push_str(&v.to_string()),
         }
