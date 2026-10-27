@@ -151,7 +151,8 @@ fn family_entry(
         .all("fonts")
         .filter_map(Val::as_msg)
         .find_map(|f| f.str("copyright").filter(|c| !c.trim().is_empty()))
-        .map(str::to_string)
+        // METADATA.pb strings can hold line breaks; the index joins the parts with spaces.
+        .map(|c| c.split_whitespace().collect::<Vec<_>>().join(" "))
         .or_else(|| ofl_header.clone());
     let reserved = if license == "OFL" {
         let from_header = ofl_header

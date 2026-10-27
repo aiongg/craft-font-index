@@ -157,7 +157,9 @@ fn check_index(idx: &Value, licenses: &[&str]) {
         }
         assert!(fam["reserved_names"].is_array(), "{name}");
         if let Some(c) = fam.get("copyright") {
-            assert!(!c.as_str().unwrap().trim().is_empty(), "{name}");
+            let c = c.as_str().unwrap();
+            assert!(!c.trim().is_empty(), "{name}");
+            assert!(!c.contains(char::is_control), "{name}: copyright parts are joined by spaces");
         }
         if let Some(u) = fam.get("upstream") {
             assert!(u.as_str().unwrap().starts_with("https://"), "{name}");
