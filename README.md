@@ -7,7 +7,7 @@ Indexes of the font collections the Craft apps install from. The apps use them t
 | Google Fonts | `indexes/google-fonts.json` | Every family in [google/fonts](https://github.com/google/fonts) at a pinned commit |
 | Noto | `indexes/noto.json` | The [Noto](https://notofonts.github.io) families Google Fonts doesn't carry, or carries in fewer styles: the full CJK fonts from [noto-cjk](https://github.com/notofonts/noto-cjk) releases, and script families, widths and UI variants missing from Google Fonts |
 
-The repository holds only generated metadata and the generators, no font files. Clients download fonts from the source's repositories at the commit or tag the index records. Every file and licence in an index has a sha256. Only fonts under a licence that allows redistribution are listed: OFL, Apache 2.0 or the Ubuntu Font Licence for Google Fonts, OFL for Noto.
+The repository holds only generated metadata and the generators, no font files. Clients download fonts from the source's repositories at the commit or tag the index records. Every file and licence in an index has a sha256. Only fonts under a licence that allows redistribution are listed: OFL, Apache 2.0 or the Ubuntu Font Licence for Google Fonts, OFL for Noto. A host's own index (an app's catalogue served by its backend) may also list CC0 and Bitstream Vera families (format 1.3).
 
 The design is @kntrttm's, from [storytold/photocraft#1135](https://github.com/storytold/photocraft/issues/1135) and [#2453](https://github.com/storytold/photocraft/pull/2453). The Google Fonts generator is based on that PR's `xtask fonts-index`, and the format extends its schema 1.
 
@@ -31,7 +31,7 @@ It then fetches each index from the same commit, at the `path` (or `gz_path`) `s
 
 ## Format
 
-The indexes and `sources.json` are JSON objects. All lists are sorted, and the same input always gives the same bytes.
+The indexes and `sources.json` are JSON objects. The same input always gives the same bytes. Lists are sorted except these, which keep their own order: a file's `names` and `instances` (the font's), its `axes` (`fvar` order), a family's `categories` (METADATA.pb order) and `reserved_names` (the licence notice's), `source_info.file_urls` and `sources.json`'s `indexes` (priority order).
 
 ### Versioning
 
@@ -40,9 +40,9 @@ The indexes and `sources.json` are JSON objects. All lists are sorted, and the s
 - rejects an index whose major version it doesn't know;
 - ignores fields it doesn't know.
 
-A minor version only adds fields. Any other change (removing or renaming a field, or changing a field's meaning or type) is a new major version. `schema` holds the major version as a number. photocraft#2453's reader checks that field.
+A minor version only adds fields, and may add `license` ids. A client leaves out a family whose `license` it doesn't know, and reads the rest of the index. Any other change (removing or renaming a field, or changing a field's meaning or type) is a new major version. `schema` holds the major version as a number. photocraft#2453's reader checks that field.
 
-The current version is `1.2`. Version 1.1 had no `tags`, `copyright`, `reserved_names`, `notice_file`, `upstream`, `samples`, `sample_script`, `sample_text`, `instances` or `list_instance`; a 1.1 reader ignores them. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
+The current version is `1.3`. Version 1.2 had no `names` (a 1.2 reader ignores it) and allowed only `OFL`, `APACHE2` and `UFL` as a family's `license`; `license_file` was null only when google/fonts had no licence file for the family. Version 1.3 adds a rule on top: never null for `CC0` or `BITSTREAM-VERA`. A reader that follows the rule above leaves out a family whose `license` it doesn't know, which is how craft-font-store's reader treats a licence it doesn't list, unless the id string itself breaks its string rule (over 1024 bytes, or a control character), when it refuses the whole index. That rule is new in this text: 1.2 readers were never told to skip unknown licence ids, so a 1.2 reader may refuse an index that has a `CC0` or `BITSTREAM-VERA` family. Version 1.1 had no `tags`, `copyright`, `reserved_names`, `notice_file`, `upstream`, `samples`, `sample_script`, `sample_text`, `instances` or `list_instance`; a 1.1 reader ignores them. Version 1.0 had no `source_info`, `repo`, `ref`, `license_file` or `width`, and only Google Fonts indexes. A 1.1 reader treats a 1.0 index as the Google Fonts source and builds file URLs from `base_url` and `fallback_base_url`. The Google Fonts index keeps every 1.0 field, so 1.0 readers still read it.
 
 ### sources.json
 
@@ -154,19 +154,35 @@ Scripts with neither (`Zsym`, `Lina`, ...) have no sample; their files carry the
 | `subsets` | string array | google/fonts subsets (`latin`, `latin-ext`, `japanese`, `menu`, ...); empty for other sources |
 | `languages` | number array | Positions in the top-level `languages` array |
 | `scripts` | string array | ISO 15924 codes, each in the top-level `scripts` array |
-| `license` | string | `OFL`, `APACHE2` or `UFL` |
+| `license` | string | `OFL`, `APACHE2` or `UFL`; 1.3: also `CC0` or `BITSTREAM-VERA`, see "Licences" |
 | `license_path` | string or null | Format 1.0: the licence file in google/fonts (`ofl/lato/OFL.txt`), relative to `base_url`. Null in other sources. |
-| `license_file` | object or null | 1.1. The licence file: `path`, `size`, `sha256`, and `repo` and `ref` when it isn't in the family's repository at the family's ref. Located like a font file. Null only when google/fonts has no licence file for the family. |
+| `license_file` | object or null | 1.1. The licence file: `path`, `size`, `sha256`, and `repo` and `ref` when it isn't in the family's repository at the family's ref. Located like a font file. Null only when google/fonts has no licence file for the family; never null for a `CC0` or `BITSTREAM-VERA` family. |
 | `repo`, `ref` | string | 1.1, optional. Where the family's files are, when that isn't the top-level `repo` and `ref` (the Noto CJK families are in notofonts/noto-cjk at a release tag). |
 | `tags` | string array | 1.2. Design traits, sorted, each from the vocabulary below. Never empty for a family with a category; see "Tags". |
 | `copyright` | string | 1.2, optional. The copyright notice: METADATA.pb's `copyright` of the family's first font, else the lines at the top of the licence file, joined by spaces. |
-| `reserved_names` | string array | 1.2. The Reserved Font Names the OFL notice declares (`with Reserved Font Names "Abril" and "Abril Fatface"` gives `Abril`, `Abril Fatface`). Empty when none. A client that modifies a font must rename it if this isn't empty. |
+| `reserved_names` | string array | 1.2. The names a modified font must not use. For an OFL family, the Reserved Font Names the OFL notice declares (`with Reserved Font Names "Abril" and "Abril Fatface"` gives `Abril`, `Abril Fatface`); a `BITSTREAM-VERA` family lists `Bitstream` and `Vera` (see "Licences"). Empty when none. A client that modifies a font must rename it if this isn't empty. |
 | `notice_file` | object | 1.2, optional. An Apache family's `NOTICE` file: `path`, `size`, `sha256`, located like `license_file`. Absent when the family ships none. |
 | `upstream` | string | 1.2, optional. METADATA.pb's `source.repository_url`: where the family is developed. |
 | `sample_script` | string | 1.2. The script whose sample previews the family: the script most of its files show (see "Preview text"). |
 | `files` | array | The font files, sorted by path |
 
 `languages` holds the languages the source declares (google/fonts METADATA.pb), plus every living language whose base exemplar characters are all in the family's character map. A living language is one with a known speaker population that is not marked historical. Families refer to languages by position because that halves the index size. `scripts` holds the scripts of those languages, plus the family's own script: METADATA.pb's `primary_script` and the scripts of its subsets for Google Fonts, the script of the notofonts repository or CJK region for Noto.
+
+### Licences
+
+A family's `license` is one of these ids. They are the SPDX identifiers in upper case without a version (`OFL`, `APACHE2` and `UFL` are google/fonts' METADATA.pb spelling and stay as they were; the new ids follow the same shape), and a version is left out where the licence has only one:
+
+| `license` | Licence | SPDX | Format |
+|---|---|---|---|
+| `OFL` | SIL Open Font License 1.1 | `OFL-1.1` | 1.0 |
+| `APACHE2` | Apache License 2.0 | `Apache-2.0` | 1.0 |
+| `UFL` | Ubuntu Font Licence 1.0 | `Ubuntu-font-1.0` | 1.0 |
+| `CC0` | CC0 1.0 Universal | `CC0-1.0` | 1.3 |
+| `BITSTREAM-VERA` | Bitstream Vera Fonts licence, which the DejaVu fonts' licence builds on | `Bitstream-Vera` | 1.3 |
+
+Only licences that allow redistribution are listed. Neither generator writes `CC0` or `BITSTREAM-VERA` (google/fonts currently declares no such licence, Noto is OFL); they are for indexes a host app writes for its own catalogue, which a client reads by the same rules. A family under either has a `license_file`, never null: the Bitstream Vera licence requires its notice to travel with every copy, and a CC0 dedication is evidence of the grant that a client should be able to show. A reader that doesn't know the id leaves such a family out; the rest of the index reads as before.
+
+The Bitstream Vera licence lets a modified font be distributed only if it is renamed without "Bitstream" or "Vera", so a `BITSTREAM-VERA` family lists at least `Bitstream` and `Vera` in `reserved_names`, plus every name its licence file reserves (the DejaVu fonts' licence also reserves `Arev` and `Tavmjong Bah`, in its Arev section). Neither generator writes such a family, so this is a rule for index writers. No reader enforces it for a host's index; `tests/committed_index.rs` checks the two required names, and the `license_file` rule, on its own fixtures. The rest is the writer's duty.
 
 ### Tags
 
@@ -217,7 +233,7 @@ Google Fonts: a family gets each tag above that one of its tag rows reaches with
 | `width` | number | 1.1, optional. CSS font-stretch percentage of the default instance, from the `wdth` axis or OS/2 `usWidthClass`. Present only when it isn't 100, so a family can list static files that differ only in width. |
 | `axes` | array | Variation axes, `{"tag": "wght", "min": 100.0, "max": 900.0}`, read from the font's `fvar` table. Empty for a static font. |
 | `postscript` | string array | PostScript names: METADATA.pb's `post_script_name`, the font's name ID 6 and, for a variable font, each named instance's PostScript name. When an instance has no name of its own, it is the name ID 25 prefix, `-` and the subfamily name without spaces. Missing-font lookup matches on these. |
-
+| `names` | string array | 1.3, optional. The face's style names as the font's own name table gives them, so a client can find the face by the style a document stores. The face's own style name, by the rule VectorCraft names a face with (`face_names`; it may name a variable face by its default instance instead): its typographic subfamily (name ID 17) as the `english_or_first` rule gives it (the first en-US record, else en, else an unlabeled one, else the first) when that is non-empty, else its subfamily (name ID 2) the same way, and never the other one once chosen. Both are chosen from every record, and the style is listed only if its text is one of the first 64 non-empty records of its ID, the window a reader checks; otherwise no own style is listed. It is listed only when the face belongs to the family the index lists: the face's family is its typographic family (name ID 16), else its family (name ID 1), chosen the same way from every record and compared whole, and must equal the family name the index lists (the METADATA.pb `name`; for Noto the name of the group), ignoring case, spaces and punctuation (a name with no letters or digits matches only itself, and a file with neither ID matches nothing). Nothing else gates it, and every name listed is a record a reader accepts (it reads ID 2 when ID 17's first or English record is empty). A `Noto Serif Myanmar Condensed` file lists no `names` at all under `Noto Serif Myanmar`: neither an own style nor the names of its instances. Then, for a variable font, the subfamily name (as `english_or_first` gives it; when that pick is non-empty but outside the reader's 64-record window, the first non-empty record; an instance whose pick is empty gives none, as clients skip it) of each of the first 256 `fvar` named instances; later instances give no names, however many names repeat before them. In that order, without duplicates and without empty strings (a variable font whose instance is named `Weight 450` lists `Weight 450`). At most 256 names, each at most 512 bytes with no control characters (the generator leaves out any name that breaks a limit). Absent when the font gives none. A client matches a name exactly, ignoring case, spaces and punctuation (only letters and digits compared), as it does a PostScript name's suffix. |
 | `instances` | array | 1.2, optional. The `fvar` named instances, in font order: `{"name": "Bold", "coordinates": {"wght": 700.0}}`, with `name` the instance's subfamily name and a user coordinate for every axis, in `axes` order. Absent for a static font. |
 | `list_instance` | number | 1.2, optional. The instance a font list shows, as a position in `instances`: for an italic file (`style` `italic`, `Italic` in the file name, or every instance's name ending in `Italic`) the one named `Italic`, else the one named `Regular`. Absent when there is no such instance: the list shows the default instance (the axis defaults). Many italic variable fonts default to Thin, which is why the default isn't always the right choice. |
 | `sample_script` | string | 1.2, optional. The file's own preview script, when it isn't the family's `sample_script` (Rasa's italic has no Gujarati and shows Latin). |
@@ -240,7 +256,7 @@ The family's `sample_script` is the script most of its files end up with (the st
 ### Example
 
 ```json
-{"schema":1,"version":"1.2","source":"notofonts","commit":"93fac8a...",
+{"schema":1,"version":"1.3","source":"notofonts","commit":"93fac8a...",
  "source_info":{"id":"notofonts","name":"Noto","homepage":"https://notofonts.github.io","curated":true,
    "file_urls":["https://cdn.jsdelivr.net/gh/{repo}@{ref}/{path}","https://raw.githubusercontent.com/{repo}/{ref}/{path}"]},
  "repo":"notofonts/notofonts.github.io","ref":"93fac8a...",
@@ -260,7 +276,7 @@ The family's `sample_script` is the script most of its files end up with (the st
  "license_file":{"path":"LICENSE","size":4301,"sha256":"6a73f954..."},
  "repo":"notofonts/noto-cjk","ref":"Sans2.004","sample_script":"Jpan",
  "files":[{"path":"Sans/OTF/Japanese/NotoSansCJKjp-Black.otf","size":17828280,"sha256":"...",
-   "style":"normal","weight":900,"axes":[],"postscript":["NotoSansCJKjp-Black"]},
+   "style":"normal","weight":900,"axes":[],"postscript":["NotoSansCJKjp-Black"],"names":["Black"]},
    ...]},
 {"family":"Noto Serif Myanmar","source":"notofonts","designer":"Google","categories":["SERIF"],
  "subsets":[],"languages":[0,2,3],"scripts":["Latn","Mymr"],
@@ -271,6 +287,7 @@ The family's `sample_script` is the script most of its files end up with (the st
    "sha256":"...","style":"normal","weight":400,
    "axes":[{"tag":"wght","min":100.0,"max":900.0},{"tag":"wdth","min":62.5,"max":100.0}],
    "postscript":["NotoSerifMyanmar-Black","NotoSerifMyanmar-Bold","..."],
+   "names":["Regular","Thin","..."],
    "instances":[{"name":"Thin","coordinates":{"wght":100.0,"wdth":100.0}},...,{"name":"Regular","coordinates":{"wght":400.0,"wdth":100.0}},...],
    "list_instance":3}]},
 ...]}
@@ -335,7 +352,7 @@ More tests need the checkouts at the indexes' commits, or the network:
 GOOGLE_FONTS_CHECKOUT=<dir> NOTO_MIRROR=<dir> cargo test --release -- --ignored
 ```
 
-- `regenerating_google_sample_matches` and `regenerating_noto_sample_matches` regenerate a few families (static and variable, each licence directory, CJK, static widths, sub-families) and compare them with the committed entries.
+- `regenerating_google_sample_matches` and `regenerating_noto_sample_matches` regenerate a few families (static and variable, each licence directory, CJK, static widths, sub-families) and compare them with the committed entries. They fail with a message unless the committed indexes are at the generator's version; `scripts/regenerate.sh` regenerates the indexes before it runs them, so it never meets that.
 - `google_sample_files_match_sha256_and_size` checks every 20th Google Fonts file; `noto_sample_files_match_sha256_and_size` checks every 5th Noto file and every Noto licence.
 - `downloads_match_index` downloads the three smallest files and a licence of each index from every URL template and checks their sha256.
 

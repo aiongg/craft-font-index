@@ -140,3 +140,74 @@ fn hostile_noto_mirror_entries_are_warnings() {
     }
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// A font with only a `name` table of (name ID, string) records, as UTF-16BE on Windows platform.
+fn name_only_font(records: &[(u16, &str)]) -> Vec<u8> {
+    let mut sorted = records.to_vec();
+    sorted.sort_by_key(|r| r.0);
+    let mut table = vec![0, 0];
+    table.extend((sorted.len() as u16).to_be_bytes());
+    table.extend((6 + 12 * sorted.len() as u16).to_be_bytes());
+    let mut strings = Vec::new();
+    for (id, s) in &sorted {
+        let utf16: Vec<u8> = s.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for v in [
+            3u16,
+            1,
+            0x409,
+            *id,
+            utf16.len() as u16,
+            strings.len() as u16,
+        ] {
+            table.extend(v.to_be_bytes());
+        }
+        strings.extend(utf16);
+    }
+    table.extend(strings);
+    let mut font = vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    font.extend(*b"name");
+    font.extend([0; 4]);
+    font.extend(28u32.to_be_bytes());
+    font.extend((table.len() as u32).to_be_bytes());
+    font.extend(table);
+    font
+}
+
+#[test]
+fn an_id_2_style_counts_only_when_id_1_is_the_metadata_family() {
+    let repo = tmp_repo("id2");
+    let dir = repo.join("ofl/fam");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("METADATA.pb"),
+        "name: \"Fam\"\nfonts { filename: \"Italic.ttf\" }\nfonts { filename: \"SemiBold.ttf\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Italic.ttf"),
+        name_only_font(&[(1, "Fam"), (2, "Italic"), (6, "Fam-Italic")]),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("SemiBold.ttf"),
+        name_only_font(&[(1, "Fam SemiBold"), (2, "Regular"), (6, "Fam-SemiBold")]),
+    )
+    .unwrap();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let idx = craft_font_index::build_index(&repo, commit, None, &mut Vec::new()).unwrap();
+    let files = idx["families"][0]["files"].as_array().unwrap();
+    let names = |p: &str| {
+        files
+            .iter()
+            .find(|f| f["path"] == p)
+            .unwrap()
+            .get("names")
+            .cloned()
+    };
+    assert_eq!(
+        names("ofl/fam/Italic.ttf"),
+        Some(serde_json::json!(["Italic"]))
+    );
+    assert_eq!(names("ofl/fam/SemiBold.ttf"), None);
+    let _ = std::fs::remove_dir_all(&repo);
+}

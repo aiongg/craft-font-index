@@ -28,8 +28,13 @@ use crate::lang::LangData;
 pub use google::{LICENSE_DIRS, build_index};
 
 /// Format version, `MAJOR.MINOR`. Readers reject an unknown major version; a minor version
-/// only adds fields.
-pub const VERSION: &str = "1.2";
+/// only adds fields (and, for `license`, ids).
+pub const VERSION: &str = "1.3";
+/// The `license` ids a family may have (format 1.3): see the README's "Licences".
+pub const LICENSES: &[&str] = &["OFL", "APACHE2", "UFL", "CC0", "BITSTREAM-VERA"];
+/// The ids whose families must have a `license_file` (the others may have none only when
+/// google/fonts has no licence file for the family).
+pub const LICENSES_WITH_FILE: &[&str] = &["CC0", "BITSTREAM-VERA"];
 /// The major version as a number, the field photocraft#2453's reader checks.
 pub const SCHEMA: u32 = 1;
 
@@ -104,6 +109,10 @@ pub(crate) fn file_record(
     if (info.width - 100.0).abs() > 0.01 {
         rec["width"] = json!(info.width);
     }
+    let names = style_names(&info.names);
+    if !names.is_empty() {
+        rec["names"] = json!(names);
+    }
     if !info.instances.is_empty() {
         let instances: Vec<Value> = info
             .instances
@@ -120,6 +129,32 @@ pub(crate) fn file_record(
         rec["list_instance"] = json!(i);
     }
     rec
+}
+
+/// The most `names` a file lists.
+pub const MAX_NAMES: usize = 256;
+/// The most non-empty records of one name ID a verifier reads: a style or family name outside
+/// them is not one it accepts.
+pub const MAX_NAME_RECORDS: usize = 64;
+/// The longest string of an index's string arrays other than `postscript`, in bytes.
+pub const MAX_STRING_BYTES: usize = 512;
+
+/// A file's `names`: the font's own style names, leaving out any that is empty, too long or has a
+/// control character, and keeping at most [`MAX_NAMES`].
+pub fn style_names(names: &[String]) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for n in names {
+        let n = n.as_str();
+        if !n.is_empty()
+            && n.len() <= MAX_STRING_BYTES
+            && !n.chars().any(char::is_control)
+            && !out.contains(&n)
+        {
+            out.push(n);
+        }
+    }
+    out.truncate(MAX_NAMES);
+    out
 }
 
 /// The named instance a font list shows: for an italic file (`italic`, or every instance's name
