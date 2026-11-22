@@ -212,7 +212,7 @@ fn family_entry(
                 continue;
             }
         };
-        let info = crate::font::read_font(&data);
+        let mut info = crate::font::read_font(&data);
         // Clients parse every file before installing it, so an unparseable one is useless.
         if info.axes.is_none() {
             warnings.push(format!(
@@ -224,6 +224,8 @@ fn family_entry(
         let weight = f.num("weight").map_or(400, |w| w.clamp(1.0, 1000.0) as u32);
         let style = f.str("style").unwrap_or("normal");
         let extra_ps = f.str("post_script_name").map(str::to_string);
+        // Its own style and instance names count only under the family name the index lists.
+        info.names = info.names_under(&family);
         let pick = sample::pick(&lang.samples, primary, &info.codepoints);
         let mut rec = file_record(
             format!("{dir}/{name}/{filename}"),

@@ -3,6 +3,10 @@
 //!
 //!     GOOGLE_FONTS_CHECKOUT=<dir> NOTO_MIRROR=<dir> cargo test --release -- --ignored
 //!
+//! The `regenerating_*` tests compare a fresh index with the committed one, so they fail with a
+//! message when the committed indexes aren't at the generator's version (`cfi::VERSION`).
+//! `scripts/regenerate.sh` regenerates the indexes before it runs them, so it never meets that.
+//!
 //! `downloads_match_index` fetches a few files over the network and needs neither.
 
 use std::path::{Path, PathBuf};
@@ -32,6 +36,19 @@ const NOTO_SAMPLE: &[&str] = &[
 fn committed(path: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// Fails unless the committed index was written by this generator's format version: a fresh
+/// index of another version differs in fields, not in what the sample is meant to check, and a
+/// skipped test would show only as passed.
+fn require_generator_version(idx: &Value) {
+    assert!(
+        idx["version"] == cfi::VERSION,
+        "committed index is version {}, generator {}: run scripts/regenerate.sh, which \
+         regenerates before comparing",
+        idx["version"],
+        cfi::VERSION
+    );
 }
 
 fn git_head(dir: &Path) -> String {
@@ -133,6 +150,7 @@ fn check_file(local: &Path, f: &Value) {
 #[ignore = "needs GOOGLE_FONTS_CHECKOUT"]
 fn regenerating_google_sample_matches() {
     let idx = committed("indexes/google-fonts.json");
+    require_generator_version(&idx);
     let repo = google_checkout(&idx);
     let only: Vec<String> = GOOGLE_SAMPLE.iter().map(|s| s.to_string()).collect();
     let commit = idx["commit"].as_str().unwrap();
@@ -169,6 +187,7 @@ fn google_sample_files_match_sha256_and_size() {
 #[ignore = "needs GOOGLE_FONTS_CHECKOUT and NOTO_MIRROR"]
 fn regenerating_noto_sample_matches() {
     let idx = committed("indexes/noto.json");
+    require_generator_version(&idx);
     let mirror = noto_mirror(&idx);
     let google = committed("indexes/google-fonts.json");
     let lang = cfi::lang::LangData::load(&google_checkout(&google), &mut Vec::new()).unwrap();

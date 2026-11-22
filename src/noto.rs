@@ -234,12 +234,37 @@ struct Parts {
     sample_script: Option<String>,
 }
 
+/// A file of a group: its record, code points and its face (family and own style) whose `names`
+/// wait for the group's family name.
+type GroupFile = (Value, BTreeSet<u32>, Option<crate::font::StyleFallback>);
+
 /// A family as read from its files.
 struct Group {
     family: String,
-    /// Each file's record and code points.
-    files: Vec<(Value, BTreeSet<u32>)>,
+    /// Each file's record, code points and face. A record's `names` are patched with
+    /// `with_own_style` once the group's family is known (Google Fonts instead replaces
+    /// `FontInfo::names` before it writes the record).
+    files: Vec<GroupFile>,
     designer: Option<String>,
+}
+
+/// A record's `names`: removed when `names` is empty, else set where it is, or added where
+/// `file_record` puts it, after `postscript` (and `width`) and before `instances`.
+fn set_names(rec: &mut Value, names: &[&str]) {
+    let Some(obj) = rec.as_object_mut() else {
+        return;
+    };
+    if names.is_empty() {
+        obj.shift_remove("names");
+    } else if let Some(v) = obj.get_mut("names") {
+        *v = json!(names);
+    } else {
+        let at = obj
+            .keys()
+            .position(|k| k == "instances" || k == "list_instance")
+            .unwrap_or(obj.len());
+        obj.shift_insert(at, "names".into(), json!(names));
+    }
 }
 
 /// The build (`full/ttf`) of a state.json path.
@@ -257,10 +282,10 @@ impl Group {
         if let Some(b) = BUILDS.iter().find(|b| {
             self.files
                 .iter()
-                .any(|(f, _)| f["path"].as_str().is_some_and(|p| build_of(p) == **b))
+                .any(|(f, ..)| f["path"].as_str().is_some_and(|p| build_of(p) == **b))
         }) {
             self.files
-                .retain(|(f, _)| f["path"].as_str().is_some_and(|p| build_of(p) == *b));
+                .retain(|(f, ..)| f["path"].as_str().is_some_and(|p| build_of(p) == *b));
         }
         self
     }
@@ -270,7 +295,7 @@ impl Group {
     fn into_parts(self, lang: &LangData, primary: Option<&str>) -> Parts {
         let mut cmap = BTreeSet::new();
         let mut files = Vec::new();
-        for (mut f, c) in self.files {
+        for (mut f, c, ..) in self.files {
             sample::apply(&mut f, sample::pick(&lang.samples, primary, &c));
             cmap.extend(c);
             files.push(f);
@@ -350,11 +375,13 @@ fn read_files(
         if g.designer.is_none() {
             g.designer = info.designer.clone();
         }
+        let face = info.own_style.clone();
         let style = if info.italic { "italic" } else { "normal" };
         let weight = info.weight.round().clamp(1.0, 1000.0) as u32;
         g.files.push((
             file_record(p.clone(), &data, info, style, weight, None),
             cmap,
+            face,
         ));
     }
     let mut out = Vec::new();
@@ -371,6 +398,22 @@ fn read_files(
         } else if g.files.is_empty() {
             counts.unusable += 1;
         } else {
+            // A file's own style and instance names count only under the family name the group
+            // takes: a face of another family (`Fam Condensed` in `Fam`) lists none.
+            for (rec, _, face) in &mut g.files {
+                if face.is_none() {
+                    continue;
+                }
+                let given: Vec<String> = rec["names"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect();
+                let names = crate::font::with_own_style(&given, face.as_ref(), &g.family);
+                let kept = crate::style_names(&names);
+                set_names(rec, &kept);
+            }
             out.push(g);
         }
     }
@@ -680,6 +723,8 @@ pub fn build_index(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn file(style: &str, weight: u32, axes: Value) -> Value {
@@ -718,5 +763,86 @@ mod tests {
         assert!(!is_font_path("fonts/NotoSansAdlam/full/ttf/../x.ttf"));
         assert!(!is_font_path("/etc/full/ttf/x/y.ttf"));
         assert!(!is_font_path("fonts/NotoSansAdlam/full/ttf/x.otf"));
+    }
+
+    /// Writes one hand-built font under a fresh directory and returns the directory.
+    fn mirror_with(name: &str, fonts: &[(&str, &[(u16, &str)])]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("noto-unit-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (file, records) in fonts {
+            let font =
+                crate::font::testing::sfnt(&[(b"name", crate::font::testing::name_table(records))]);
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, font).unwrap();
+        }
+        dir
+    }
+
+    const OFL: (u16, &str) = (13, "Licensed under the SIL Open Font License, Version 1.1");
+
+    #[test]
+    fn an_id_2_style_counts_only_under_the_groups_family_name() {
+        // Neither file has an ID 16. The group's family is the shortest name: "Noto Sans X".
+        let dir = mirror_with(
+            "id2",
+            &[
+                (
+                    "NotoSansX-Italic.ttf",
+                    &[
+                        (1, "Noto Sans X"),
+                        (2, "Italic"),
+                        (6, "NotoSansX-Italic"),
+                        OFL,
+                    ],
+                ),
+                (
+                    "NotoSansX-SemiBold.ttf",
+                    &[
+                        (1, "Noto Sans X SemiBold"),
+                        (2, "Regular"),
+                        (6, "NotoSansX-SemiBold"),
+                        OFL,
+                    ],
+                ),
+            ],
+        );
+        let paths = vec![
+            "NotoSansX-Italic.ttf".to_string(),
+            "NotoSansX-SemiBold.ttf".to_string(),
+        ];
+        let (mut counts, mut warnings) = (Counts::default(), Vec::new());
+        let groups = read_files(&dir, &paths, "x", &mut counts, &mut warnings);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(groups[0].family, "Noto Sans X");
+        let names = |f: &str| {
+            let rec = groups[0].files.iter().find(|r| r.0["path"] == f).unwrap();
+            rec.0.get("names").cloned()
+        };
+        assert_eq!(names("NotoSansX-Italic.ttf"), Some(json!(["Italic"])));
+        assert_eq!(names("NotoSansX-SemiBold.ttf"), None);
+    }
+
+    #[test]
+    fn names_go_back_where_file_record_puts_them() {
+        let keys = |v: &Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
+        let mut rec =
+            json!({"path": "p", "postscript": ["a"], "instances": [], "list_instance": 0});
+        set_names(&mut rec, &["Regular"]);
+        assert_eq!(
+            keys(&rec),
+            ["path", "postscript", "names", "instances", "list_instance"]
+        );
+        set_names(&mut rec, &["Bold"]);
+        assert_eq!(rec["names"], json!(["Bold"]));
+        set_names(&mut rec, &[]);
+        assert_eq!(
+            keys(&rec),
+            ["path", "postscript", "instances", "list_instance"]
+        );
+        let mut bare = json!({"path": "p", "postscript": ["a"]});
+        set_names(&mut bare, &["Regular"]);
+        assert_eq!(keys(&bare), ["path", "postscript", "names"]);
     }
 }

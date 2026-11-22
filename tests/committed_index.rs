@@ -33,13 +33,50 @@ fn strs(v: &Value) -> Vec<&str> {
         .collect()
 }
 
-/// The rules every index follows, whatever its source.
+/// The version of an index as (major, minor).
+fn version_of(v: &Value) -> (u64, u64) {
+    let (major, minor) = v.as_str().unwrap().split_once('.').unwrap();
+    (major.parse().unwrap(), minor.parse().unwrap())
+}
+
+/// This repository's check of its own fixtures for the format 1.3 rules on a family's licence:
+/// the ids that need a `license_file` have one, and a BITSTREAM-VERA family lists at least
+/// `Bitstream` and `Vera` as reserved names (the licence lets a modified font be distributed only
+/// when renamed without them). These are an index writer's rules: the generators write neither
+/// licence. craft-font-store leaves out (with a warning) a CC0 or Vera family missing its
+/// `license_file`, but no reader enforces the `reserved_names` rule for a host's index, and the
+/// other names a licence file reserves (DejaVu's `Arev` and `Tavmjong Bah`) are the writer's duty,
+/// not checked here.
+fn check_licence_rules(fam: &Value) {
+    let name = fam["family"].as_str().unwrap();
+    let license = fam["license"].as_str().unwrap();
+    assert!(
+        !fam["license_file"].is_null() || !cfi::LICENSES_WITH_FILE.contains(&license),
+        "{name}: a {license} family has a license_file"
+    );
+    if license == "BITSTREAM-VERA" {
+        let reserved = strs(&fam["reserved_names"]);
+        for r in ["Bitstream", "Vera"] {
+            assert!(
+                reserved.contains(&r),
+                "{name}: a BITSTREAM-VERA family reserves `{r}`"
+            );
+        }
+    }
+}
+
+/// The rules every index follows, whatever its source. An index of an earlier minor version than
+/// the generator's keeps its own version's rules: an index older than the generator is read by the
+/// rules of its own version.
 fn check_index(idx: &Value, licenses: &[&str]) {
     let version = idx["version"].as_str().unwrap();
-    let major: u64 = version.split('.').next().unwrap().parse().unwrap();
+    let (major, minor) = version_of(&idx["version"]);
     assert_eq!(major, 1);
     assert_eq!(idx["schema"].as_u64(), Some(major));
-    assert_eq!(version, cfi::VERSION);
+    assert!(
+        version_of(&Value::from(cfi::VERSION)) >= (major, minor) && minor >= 2,
+        "{version}"
+    );
     let source = idx["source"].as_str().unwrap();
     let info = &idx["source_info"];
     assert_eq!(info["id"], source);
@@ -137,6 +174,16 @@ fn check_index(idx: &Value, licenses: &[&str]) {
             assert!(cfi::is_ref(fam["ref"].as_str().unwrap()), "{name}");
         }
         let lf = &fam["license_file"];
+        let license = fam["license"].as_str().unwrap();
+        let known: &[&str] = if minor >= 3 {
+            cfi::LICENSES
+        } else {
+            &["OFL", "APACHE2", "UFL"]
+        };
+        assert!(known.contains(&license), "{name}: license {license}");
+        if minor >= 3 {
+            check_licence_rules(fam);
+        }
         if !lf.is_null() {
             assert!(is_hex(lf["sha256"].as_str().unwrap(), 64), "{name}");
             assert!(lf["size"].as_u64().unwrap() > 0, "{name}");
@@ -159,7 +206,10 @@ fn check_index(idx: &Value, licenses: &[&str]) {
         if let Some(c) = fam.get("copyright") {
             let c = c.as_str().unwrap();
             assert!(!c.trim().is_empty(), "{name}");
-            assert!(!c.contains(char::is_control), "{name}: copyright parts are joined by spaces");
+            assert!(
+                !c.contains(char::is_control),
+                "{name}: copyright parts are joined by spaces"
+            );
         }
         if let Some(u) = fam.get("upstream") {
             assert!(u.as_str().unwrap().starts_with("https://"), "{name}");
@@ -257,6 +307,20 @@ fn check_index(idx: &Value, licenses: &[&str]) {
                 assert!(li < instances.len(), "{path}");
                 assert!(
                     ["Regular", "Italic"].contains(&instances[li]["name"].as_str().unwrap()),
+                    "{path}"
+                );
+            }
+            if minor >= 3
+                && let Some(names) = f.get("names")
+            {
+                let names = strs(names);
+                assert!(!names.is_empty() && names.len() <= 256, "{path}");
+                let unique: BTreeSet<&str> = names.iter().copied().collect();
+                assert_eq!(unique.len(), names.len(), "{path}: a name is listed twice");
+                assert!(
+                    names.iter().all(|n| !n.is_empty()
+                        && n.len() <= 512
+                        && !n.chars().any(char::is_control)),
                     "{path}"
                 );
             }
@@ -394,7 +458,8 @@ fn noto_index_is_valid() {
 #[test]
 fn sources_json_pins_every_index() {
     let sources = load("sources.json");
-    assert_eq!(sources["version"], cfi::VERSION);
+    // sources.json is never newer than the generator.
+    assert!(version_of(&sources["version"]) <= version_of(&Value::from(cfi::VERSION)));
     let list = sources["indexes"].as_array().unwrap();
     assert_eq!(list.len(), INDEXES.len());
     for (entry, path) in list.iter().zip(INDEXES) {
@@ -405,6 +470,7 @@ fn sources_json_pins_every_index() {
         assert_eq!(entry["size"], json.len(), "{path}");
         assert_eq!(entry["gz_sha256"], cfi::sha256_hex(&gz), "{path}");
         let idx: Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(sources["version"], idx["version"], "{path}");
         assert_eq!(entry["source"], idx["source"]);
         assert_eq!(entry["commit"], idx["commit"]);
         assert_eq!(entry["families"], idx["families"].as_array().unwrap().len());
@@ -476,4 +542,54 @@ fn file_urls_resolve_per_family_and_encode_paths() {
     }
     let bad_ref = serde_json::json!({"repo": "x/y", "ref": "a/../b"});
     assert!(cfi::file_urls(&idx, &bad_ref, &file).is_err());
+}
+
+#[test]
+fn licenses_with_a_file_are_listed() {
+    assert!(
+        cfi::LICENSES_WITH_FILE
+            .iter()
+            .all(|l| cfi::LICENSES.contains(l))
+    );
+    assert!(cfi::LICENSES.contains(&"CC0") && cfi::LICENSES.contains(&"BITSTREAM-VERA"));
+}
+
+fn licensed(license: &str, file: Value, reserved: &[&str]) -> Value {
+    serde_json::json!({"family": "Fixture", "license": license, "license_file": file,
+        "reserved_names": reserved})
+}
+
+#[test]
+fn licence_rules_accept_a_complete_cc0_and_vera_family() {
+    let file = serde_json::json!({"path": "LICENSE", "size": 1, "sha256": "0".repeat(64)});
+    check_licence_rules(&licensed("CC0", file.clone(), &[]));
+    check_licence_rules(&licensed(
+        "BITSTREAM-VERA",
+        file.clone(),
+        &["Bitstream", "Vera"],
+    ));
+    check_licence_rules(&licensed("OFL", Value::Null, &[]));
+}
+
+#[test]
+#[should_panic(expected = "a CC0 family has a license_file")]
+fn a_cc0_family_without_a_license_file_is_refused() {
+    check_licence_rules(&licensed("CC0", Value::Null, &[]));
+}
+
+#[test]
+#[should_panic(expected = "a BITSTREAM-VERA family has a license_file")]
+fn a_vera_family_without_a_license_file_is_refused() {
+    check_licence_rules(&licensed(
+        "BITSTREAM-VERA",
+        Value::Null,
+        &["Bitstream", "Vera"],
+    ));
+}
+
+#[test]
+#[should_panic(expected = "a BITSTREAM-VERA family reserves `Vera`")]
+fn a_vera_family_must_reserve_bitstream_and_vera() {
+    let file = serde_json::json!({"path": "LICENSE", "size": 1, "sha256": "0".repeat(64)});
+    check_licence_rules(&licensed("BITSTREAM-VERA", file, &["Bitstream"]));
 }
